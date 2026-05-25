@@ -190,7 +190,7 @@ class Pillar1MarketData:
                     chunk_tickers.append(ticker)
                 
                 # 2. Wait for the OCC Open Interest ticks to trickle in
-                await asyncio.sleep(2.0) 
+                await asyncio.sleep(5.0) 
                 
                 # 3. Validation and storage
                 for t in chunk_tickers:
@@ -292,18 +292,30 @@ class Pillar1MarketData:
             
             total_leap_call_vol = 0
             total_leap_put_vol = 0
+            total_leap_call_oi = 0
+            total_leap_put_oi = 0
             max_oi = 0
-            dominant_expiry = "None"
+            max_vol = 0
+            dominant_expiry_by_oi = "None"
+            dominant_expiry_by_vol = "None"
             total_atm_oi = 0
             
             logging.info(f"Analyzing {len(opt_tickers)} qualified option tickers...")
             for ot in opt_tickers:
                 # Safely extract and sanitize OI
-                raw_oi = getattr(ot, 'openInterest', 0)
+                if ot.contract.right == 'C':
+                    raw_oi = getattr(ot, 'callOpenInterest', 0)
+                else:
+                    raw_oi = getattr(ot, 'putOpenInterest', 0)
                 oi = 0 if raw_oi is None or math.isnan(float(raw_oi)) else int(raw_oi)
                 
                 # Safely extract and sanitize Volume
                 raw_vol = getattr(ot, 'volume', 0)
+                #if ot.contract.right == 'C':
+                #    raw_vol = getattr(ot, 'callVolume', 0)
+                #else:
+                #    raw_vol = getattr(ot, 'putVolume', 0)
+
                 vol = 0 if raw_vol is None or math.isnan(float(raw_vol)) else int(raw_vol)
                 total_atm_oi += oi
                 # FOR TESTING ONLY
@@ -311,24 +323,33 @@ class Pillar1MarketData:
                 
                 if oi > max_oi:
                     max_oi = oi
-                    dominant_expiry = ot.contract.lastTradeDateOrContractMonth
+                    dominant_expiry_by_oi = ot.contract.lastTradeDateOrContractMonth
+                
+                if vol > max_vol:
+                    max_vol = vol
+                    dominant_expiry_by_vol = ot.contract.lastTradeDateOrContractMonth
                 
                 if ot.contract.right == 'C':
                     total_leap_call_vol += vol
+                    total_leap_call_oi += oi
                 else:
                     total_leap_put_vol += vol
+                    total_leap_put_oi += oi
 
             vol_skew = round(float(total_leap_call_vol) / float(total_leap_put_vol or 1), 2)
+            oi_skew = round(float(total_leap_call_oi) / float(total_leap_put_oi or 1), 2)
             
             return {
                 "leap_volume_skews": vol_skew,
-                "dominant_expiry": dominant_expiry,
-                "atm_oi_depth": total_atm_oi
+                "dominant_expiry_by_vol": dominant_expiry_by_vol,
+                "dominant_expiry_by_oi": dominant_expiry_by_oi,
+                "atm_oi_depth": total_atm_oi,
+                "leap_oi_skews": oi_skew
             }
             
         except Exception as err:
             logging.error(f"Derivative structural block parsing failed for {contract.symbol}: {err}")
-            return {"leap_volume_skews": 0, "dominant_expiry": "None", "atm_oi_depth": 0}
+            return {"leap_volume_skews": 0, "dominant_expiry_by_vol": "None", "dominant_expiry_by_oi": "None", "atm_oi_depth": 0, "leap_oi_skews": 0}
 
     def disconnect(self):
         if self.ib.isConnected():
@@ -490,6 +511,7 @@ class Pillar3CustomParser:
                     logging.info(f"Evaluating section '{row.get('section_name', 'Unknown')}' for catalyst indicators...")
                     text_chunk = row.get('text', '')
                     if not text_chunk or len(text_chunk) < 50:
+                        logging.info(f"Section text is too short for meaningful analysis. Skipping.")
                         continue
                     
                     paragraphs = [p.strip() for p in text_chunk.split('\n\n') if len(p.strip()) > 50]
@@ -504,6 +526,7 @@ class Pillar3CustomParser:
                             if keyword_hit: break
                         
                         if not keyword_hit:
+                            logging.info(f"No catalyst keywords found in paragraph. Skipping NLP classification for this segment.")
                             continue
                         
                         candidate_labels = list(self.catalyst_dictionaries.keys()) + ["Routine Business Operations"]
@@ -596,7 +619,7 @@ class ConvergencePipeline:
         
         try:
             logging.info("WEEKEND TEST MODE: Bypassing live TWS scanner...")
-            test_symbols = ["GLNG", "IMMR", "CODI", "AAPL"] 
+            test_symbols = ["ATEN", "SW", "OSPN", "CRBP", "PROP", "L", "NTCT", "CIB", "MEC", "PRM", "TAC", "LBRT", "CPT", "GTES", "MEI", "NMRA", "VTGN", "GETY", "PDFS"] 
             
             active_tickers = []
             for sym in test_symbols:
