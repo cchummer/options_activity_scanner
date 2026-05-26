@@ -103,7 +103,7 @@ class Pillar1MarketData:
                 
         return valid_candidates
 
-    def detect_volatility_contraction(weekly_df, window=20, lookback=26, contraction_threshold=0.45):
+    def detect_volatility_contraction(self, weekly_df, window=20, lookback=26, contraction_threshold=0.45):
         """
         Detects multi-week volatility contraction ("coiling base") periods using BB width.
         Compares average BB width in the recent lookback window to both the mean and median BB width
@@ -140,7 +140,7 @@ class Pillar1MarketData:
 
         return coiling_flag, contraction_mean, contraction_median
     
-    def detect_converging_triangle(weekly_df, lookback=26, slope_threshold=0.0):
+    def detect_converging_triangle(self, weekly_df, lookback=26, slope_threshold=0.0):
         """
         Detects converging triangle patterns by fitting lines to recent highs and lows.
         Returns triangle_flag, (high_slope, low_slope).
