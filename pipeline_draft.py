@@ -706,7 +706,7 @@ class ConvergencePipeline:
         
         try:
             logging.info("WEEKEND TEST MODE: Bypassing live TWS scanner...")
-            test_symbols = ["ATEN", "SW", "OSPN", "CRBP", "PROP", "L", "NTCT", "CIB", "MEC", "PRM", "TAC", "LBRT", "CPT", "GTES", "MEI", "NMRA", "VTGN", "GETY", "PDFS"] 
+            test_symbols = ["VUZI", "ABCL","ATEN", "SW", "OSPN", "CRBP", "PROP", "L", "NTCT", "CIB", "MEC", "PRM", "TAC", "LBRT", "CPT", "GTES", "MEI", "NMRA", "VTGN", "GETY", "PDFS"] 
             
             active_tickers = []
             for sym in test_symbols:
@@ -752,7 +752,7 @@ class ConvergencePipeline:
                 }
                 
                 if not self._passes_advanced_filter(feature_row):
-                    continue
+                    pass#continue
                 self.feature_store.append(feature_row)
                 
         finally:
@@ -819,4 +819,4 @@ if __name__ == "__main__":
     pipeline = ConvergencePipeline(custom_parser_engine=parser_module)
 
     # Fire the event loop runner
-    asyncio.run(pipeline.test_execute_daily_build())
+    asyncio.run(pipeline.execute_daily_build())
