@@ -114,6 +114,8 @@ class Pillar1MarketData:
             contraction_mean (float),
             contraction_median (float)
         """
+        logging.info("Calculating volatility contraction metrics using Bollinger Band width on weekly data...")
+        
         closes = weekly_df['close']
         ma = closes.rolling(window).mean()
         std = closes.rolling(window).std()
@@ -143,7 +145,8 @@ class Pillar1MarketData:
         Detects converging triangle patterns by fitting lines to recent highs and lows.
         Returns triangle_flag, (high_slope, low_slope).
         """
-        import numpy as np
+        logging.info("Calculating converging triangle metrics...")
+        
         highs = weekly_df['high'].iloc[-lookback:]
         lows = weekly_df['low'].iloc[-lookback:]
         x = np.arange(lookback)
@@ -158,13 +161,13 @@ class Pillar1MarketData:
         """Computes lookback standard deviations to flag structural trend and nested volatility compression. 
         TODO: BETTER LIMIT MITIGATION FOR HISTORICAL DATA REQUESTS."""
         try:
-            logging.info(f"Calculating multi-timeframe regime metrics for {contract.symbol}...")
+            logging.info(f"Calculating market regime metrics for {contract.symbol}...")
             bars = await self.ib.reqHistoricalDataAsync(
                 contract, endDateTime='', durationStr='5 Y',
                 barSizeSetting='1 day', whatToShow='TRADES', useRTH=True
             )
             if len(bars) < 200:
-                return {"regime": "Insufficient Data", "coiling": False, "dist_to_200dma": 0.0, "bb_width_pct_daily": 1.0, "bb_width_pct_weekly": 1.0}
+                return {"regime": "Error", "coiling": False, "contraction_mean": 0.0, "contraction_median": 0.0, "triangle_flag": 0, "high_slope": 0.0, "low_slope": 0.0, "dist_to_200dma": 0.0}
 
             df = pd.DataFrame(bars)
             # Ensure proper datetime index for resampling
@@ -179,6 +182,7 @@ class Pillar1MarketData:
                 'close': 'last',
                 'volume': 'sum'
             }).dropna()
+            logging.info(f"Computed weekly resampled data for {contract.symbol} with {len(weekly_df)} weeks of history.")
 
             # Calculate moving average distance
             close = df['close']
@@ -212,7 +216,7 @@ class Pillar1MarketData:
             }
         except Exception as e:
             logging.error(f"Regime baseline matrix calculation failed for {contract.symbol}: {e}")
-            return {"regime": "Error", "coiling": False, "contraction_mean": 0.0, "contraction_median": 0.0, "dist_to_200dma": 0.0}
+            return {"regime": "Error", "coiling": False, "contraction_mean": 0.0, "contraction_median": 0.0, "triangle_flag": 0, "high_slope": 0.0, "low_slope": 0.0, "dist_to_200dma": 0.0}
 
     async def safe_fetch_tickers(self, contracts, chunk_size=40):
         """Highly defensive fetcher with explicit wait times for slow OI ticks."""
@@ -681,8 +685,6 @@ class ConvergencePipeline:
                     "triangle_flag": regime_metrics.get("triangle_flag", 0),
                     "high_slope": float(regime_metrics.get("high_slope", 0.0)),
                     "low_slope": float(regime_metrics.get("low_slope", 0.0)),
-                    "bb_width_pct_daily": float(regime_metrics["bb_width_pct_daily"]),
-                    "bb_width_pct_weekly": float(regime_metrics["bb_width_pct_weekly"]),
                     **positioning_footprint,
                     **insider_score, 
                     "debt_reduction_pct": float(debt_delta),
@@ -717,6 +719,7 @@ class ConvergencePipeline:
             
             for t in active_tickers:
                 sym = t.contract.symbol
+                logging.info(f"Processing convergence features for {sym}...")
                 
                 regime_metrics = await self.ib_broker.determine_market_regime(t.contract)
                 
