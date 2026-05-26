@@ -6,6 +6,7 @@ import os
 import re
 import math
 import pandas as pd
+import numpy as np
 
 # External API dependencies
 from ib_async import *
@@ -73,15 +74,14 @@ class Pillar1MarketData:
         """Evaluates market snapshot buffers for unusual volume."""
         logging.info(f"Requesting market snapshots for {len(contracts)} assets...")
         
-        # 1. Request as a snapshot
+        # 1. Request 
         tickers = []
         for contract in contracts:
-            # snapshot=True fetches the full data frame (Volume, AvgVolume) immediately
             ticker = self.ib.reqMktData(contract, genericTickList='100,105', snapshot=False)
             tickers.append(ticker)
         
         # 2. Wait for delivery
-        # Even with snapshot=True, a short wait ensures the TWS gateway 
+        # A short wait ensures the TWS gateway 
         # has time to propagate the cache to your client
         await asyncio.sleep(2.0) 
         
@@ -103,13 +103,64 @@ class Pillar1MarketData:
                 
         return valid_candidates
 
+    def detect_volatility_contraction(weekly_df, window=20, lookback=26, contraction_threshold=0.45):
+        """
+        Detects multi-week volatility contraction ("coiling base") periods using BB width.
+        Compares average BB width in the recent lookback window to both the mean and median BB width
+        in all prior data. Coiling is flagged if contraction (recent/prior_mean) < contraction_threshold.
+
+        Returns:
+            coiling_flag (bool),
+            contraction_mean (float),
+            contraction_median (float)
+        """
+        closes = weekly_df['close']
+        ma = closes.rolling(window).mean()
+        std = closes.rolling(window).std()
+        bb_width = (std * 4) / ma
+
+        # Recent window (compression lookback)
+        recent_width = bb_width.iloc[-lookback:].mean()
+
+        # Prior periods
+        if len(bb_width) > lookback:
+            prior_series = bb_width.iloc[:-lookback]
+            prior_mean = prior_series.mean()
+            prior_median = prior_series.median()
+        else:
+            prior_mean = bb_width.mean()
+            prior_median = bb_width.median()
+
+        contraction_mean = recent_width / prior_mean if prior_mean else np.nan
+        contraction_median = recent_width / prior_median if prior_median else np.nan
+
+        coiling_flag = contraction_mean < contraction_threshold
+
+        return coiling_flag, contraction_mean, contraction_median
+    
+    def detect_converging_triangle(weekly_df, lookback=26, slope_threshold=0.0):
+        """
+        Detects converging triangle patterns by fitting lines to recent highs and lows.
+        Returns triangle_flag, (high_slope, low_slope).
+        """
+        import numpy as np
+        highs = weekly_df['high'].iloc[-lookback:]
+        lows = weekly_df['low'].iloc[-lookback:]
+        x = np.arange(lookback)
+        # Linear fit: recent highs and lows
+        high_slope = np.polyfit(x, highs.values, 1)[0]
+        low_slope = np.polyfit(x, lows.values, 1)[0]
+        # Triangle: highs trending down, lows trending up
+        triangle_flag = (high_slope < slope_threshold) and (low_slope > -slope_threshold)
+        return triangle_flag, (high_slope, low_slope)
+    
     async def determine_market_regime(self, contract):
         """Computes lookback standard deviations to flag structural trend and nested volatility compression. 
         TODO: BETTER LIMIT MITIGATION FOR HISTORICAL DATA REQUESTS."""
         try:
             logging.info(f"Calculating multi-timeframe regime metrics for {contract.symbol}...")
             bars = await self.ib.reqHistoricalDataAsync(
-                contract, endDateTime='', durationStr='1 Y',
+                contract, endDateTime='', durationStr='5 Y',
                 barSizeSetting='1 day', whatToShow='TRADES', useRTH=True
             )
             if len(bars) < 200:
@@ -120,40 +171,29 @@ class Pillar1MarketData:
             df['date'] = pd.to_datetime(df['date'])
             df.set_index('date', inplace=True)
             
+            # Compute weekly bars for basing/coiling detection
+            weekly_df = df.resample('W', label='right', closed='right').agg({
+                'open': 'first',
+                'high': 'max',
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+
+            # Calculate moving average distance
             close = df['close']
             sma200 = close.rolling(200).mean().iloc[-1]
             current = close.iloc[-1]
-            
-            # --- 1. DAILY VOLATILITY METRICS ---
-            sma20_daily = close.rolling(20).mean()
-            std20_daily = close.rolling(20).std()
-            
-            # 20-day normalized coefficient of variance proxy
-            vol_coeff = std20_daily.iloc[-1] / sma20_daily.iloc[-1]
-            
-            # Daily Bollinger Band Width Percentile
-            bb_width_daily = (std20_daily * 4) / sma20_daily
-            current_width_daily = bb_width_daily.iloc[-1]
-            bb_width_pct_daily = round((bb_width_daily <= current_width_daily).mean(), 3)
-            
-            # --- 2. WEEKLY VOLATILITY METRICS (Resampled) ---
-            weekly_close = close.resample('W').last()
-            sma10_weekly = weekly_close.rolling(10).mean()
-            std10_weekly = weekly_close.rolling(10).std()
-            
-            bb_width_weekly = (std10_weekly * 4) / sma10_weekly
-            current_width_weekly = bb_width_weekly.iloc[-1]
-            
-            if len(bb_width_weekly.dropna()) > 10:
-                bb_width_pct_weekly = round((bb_width_weekly <= current_width_weekly).mean(), 3)
-            else:
-                bb_width_pct_weekly = 1.0
-
-            # --- 3. NESTED COILING TRIGGER ---
-            is_coiling = (vol_coeff < 0.035) and (bb_width_pct_daily < 0.15) and (bb_width_pct_weekly < 0.20)
             dist_to_200dma = (current - sma200) / sma200
+
+            # BB compression detection
+            coiling_flag, contraction_mean, contraction_median = self.detect_volatility_contraction(weekly_df)
+
+            # Converging triangle detection
+            triangle_flag, (high_slope, low_slope) = self.detect_converging_triangle(weekly_df)
             
-            if is_coiling and abs(dist_to_200dma) < 0.08:
+            # Streamlined regime assignment
+            if coiling_flag and abs(dist_to_200dma) < 0.08:
                 regime_label = "Accumulation Base"
             elif current > sma200:
                 regime_label = "Bullish Trend"
@@ -162,14 +202,17 @@ class Pillar1MarketData:
 
             return {
                 "regime": regime_label,
-                "coiling": int(is_coiling),
-                "dist_to_200dma": round(dist_to_200dma, 3),
-                "bb_width_pct_daily": float(bb_width_pct_daily),
-                "bb_width_pct_weekly": float(bb_width_pct_weekly)
+                "coiling": int(coiling_flag),
+                "contraction_mean": float(contraction_mean),
+                "contraction_median": float(contraction_median),
+                "triangle_flag": int(triangle_flag),
+                "high_slope": float(high_slope),
+                "low_slope": float(low_slope),
+                "dist_to_200dma": float(dist_to_200dma)
             }
         except Exception as e:
             logging.error(f"Regime baseline matrix calculation failed for {contract.symbol}: {e}")
-            return {"regime": "Error", "coiling": False, "dist_to_200dma": 0.0, "bb_width_pct_daily": 1.0, "bb_width_pct_weekly": 1.0}
+            return {"regime": "Error", "coiling": False, "contraction_mean": 0.0, "contraction_median": 0.0, "dist_to_200dma": 0.0}
 
     async def safe_fetch_tickers(self, contracts, chunk_size=40):
         """Highly defensive fetcher with explicit wait times for slow OI ticks."""
@@ -562,6 +605,41 @@ class ConvergencePipeline:
         self.text_broker = custom_parser_engine
         self.feature_store = []
 
+    def _passes_advanced_filter(self, feature_row):
+        
+        symbol = feature_row.get("symbol", "N/A")
+        dist_200dma = feature_row.get("dist_to_200dma", 0)
+        ic_score = feature_row.get("insider_conviction_score", 0)
+        regime = feature_row.get("market_regime", "")
+        contraction_mean = float(feature_row.get("contraction_mean", float('nan')))
+
+        # Negative insider conviction: always reject
+        if ic_score < 0:
+            logging.info(f"Filtering out {symbol}: negative insider conviction ({ic_score}).")
+            return False
+
+        # Not an accumulation base: reject
+        if regime != "Accumulation Base":
+            logging.info(f"Filtering out {symbol}: regime not 'Accumulation Base' (found '{regime}').")
+            return False
+
+        # Too far from 200dma: reject
+        if dist_200dma > 0.08 or dist_200dma < -0.12:
+            logging.info(f"Filtering out {symbol}: distance from 200dma ({dist_200dma:.3f}) out of bounds.")
+            return False
+
+        # Invalid contraction value: reject
+        if math.isnan(contraction_mean):
+            logging.info(f"Filtering out {symbol}: contraction_mean is NaN or missing.")
+            return False
+
+        # Not enough volatility contraction: reject
+        if contraction_mean >= 0.45:
+            logging.info(f"Filtering out {symbol}: contraction_mean too high ({contraction_mean:.2f} >= 0.45).")
+            return False
+
+        return True
+    
     async def execute_daily_build(self):
         await self.ib_broker.connect_async()
         
@@ -598,6 +676,11 @@ class ConvergencePipeline:
                     "market_regime": str(regime_metrics["regime"]),
                     "is_coiling": regime_metrics["coiling"],
                     "dist_to_200dma": float(regime_metrics["dist_to_200dma"]),
+                    "contraction_mean": float(regime_metrics.get("contraction_mean", 0.0)),
+                    "contraction_median": float(regime_metrics.get("contraction_median", 0.0)),
+                    "triangle_flag": regime_metrics.get("triangle_flag", 0),
+                    "high_slope": float(regime_metrics.get("high_slope", 0.0)),
+                    "low_slope": float(regime_metrics.get("low_slope", 0.0)),
                     "bb_width_pct_daily": float(regime_metrics["bb_width_pct_daily"]),
                     "bb_width_pct_weekly": float(regime_metrics["bb_width_pct_weekly"]),
                     **positioning_footprint,
@@ -606,11 +689,13 @@ class ConvergencePipeline:
                     **catalyst_features 
                 }
                 
+                if not self._passes_advanced_filter(feature_row):
+                    continue
                 self.feature_store.append(feature_row)
                 
         finally:
             self.ib_broker.disconnect()
-            
+        
         self.export_to_feature_store()
 
     async def test_execute_daily_build(self):
@@ -652,19 +737,24 @@ class ConvergencePipeline:
                     "market_regime": str(regime_metrics["regime"]),
                     "is_coiling": regime_metrics["coiling"],
                     "dist_to_200dma": float(regime_metrics["dist_to_200dma"]),
-                    "bb_width_pct_daily": float(regime_metrics["bb_width_pct_daily"]),
-                    "bb_width_pct_weekly": float(regime_metrics["bb_width_pct_weekly"]),
+                    "contraction_mean": float(regime_metrics.get("contraction_mean", 0.0)),
+                    "contraction_median": float(regime_metrics.get("contraction_median", 0.0)),
+                    "triangle_flag": regime_metrics.get("triangle_flag", 0),
+                    "high_slope": float(regime_metrics.get("high_slope", 0.0)),
+                    "low_slope": float(regime_metrics.get("low_slope", 0.0)),
                     **positioning_footprint,
                     **insider_score, 
                     "debt_reduction_pct": float(debt_delta),
                     **catalyst_features 
                 }
                 
+                if not self._passes_advanced_filter(feature_row):
+                    continue
                 self.feature_store.append(feature_row)
                 
         finally:
             self.ib_broker.disconnect()
-            
+        
         self.export_to_feature_store()
 
     def export_to_feature_store(self):
