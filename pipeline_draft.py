@@ -37,7 +37,7 @@ class Pillar1MarketData:
     async def connect_async(self):
         logging.info(f"Establishing async socket gateway to TWS at {self.host}:{self.port}...")
         await self.ib.connectAsync(self.host, self.port, clientId=self.client_id)
-        self.ib.reqMarketDataType(2)  # Request frozen data to avoid real-time streaming issues during off-hours
+        self.ib.reqMarketDataType(1)  # Request frozen data to avoid real-time streaming issues during off-hours
 
     async def scan_accumulation_candidates(self, limit=60):
         logging.info("Executing TWS Scanner: Low P/C Volume Ratio...")
@@ -259,7 +259,7 @@ class Pillar1MarketData:
             
         return all_tickers
 
-    async def analyze_positioning_footprint(self, contract, underlying_price, min_days_to_expiry=60, max_days_to_expiry=550):
+    async def analyze_positioning_footprint(self, contract, underlying_price, min_days_to_expiry=60, max_days_to_expiry=650):
         """Parses multi-month option chain structures looking for heavy accumulation near/at-the-money."""
         logging.info(f"Extracting derivative positioning footprints for {contract.symbol}...")
         try:
@@ -349,6 +349,9 @@ class Pillar1MarketData:
             
             logging.info(f"Analyzing {len(opt_tickers)} qualified option tickers...")
             for ot in opt_tickers:
+                #logging.info(f"{vars(ot)}")  # Log the full ticker object for debugging
+                #input()
+
                 # Safely extract and sanitize OI
                 if ot.contract.right == 'C':
                     raw_oi = getattr(ot, 'callOpenInterest', 0)
@@ -692,7 +695,7 @@ class ConvergencePipeline:
                 }
                 
                 if not self._passes_advanced_filter(feature_row):
-                    continue
+                    pass#continue
                 self.feature_store.append(feature_row)
                 
         finally:
