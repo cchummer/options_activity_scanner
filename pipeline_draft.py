@@ -37,7 +37,7 @@ class Pillar1MarketData:
     async def connect_async(self):
         logging.info(f"Establishing async socket gateway to TWS at {self.host}:{self.port}...")
         await self.ib.connectAsync(self.host, self.port, clientId=self.client_id)
-        self.ib.reqMarketDataType(1)  # Request frozen data to avoid real-time streaming issues during off-hours
+        self.ib.reqMarketDataType(2) 
 
     async def scan_accumulation_candidates(self, limit=60):
         logging.info("Executing TWS Scanner: Low P/C Volume Ratio...")
@@ -83,17 +83,21 @@ class Pillar1MarketData:
         # 2. Wait for delivery
         # A short wait ensures the TWS gateway 
         # has time to propagate the cache to your client
-        await asyncio.sleep(2.0) 
+        await asyncio.sleep(5.0) 
         
         valid_candidates = []
         for t in tickers:
             # Sanitization for volume fields
-            call_vol = getattr(t, 'callVolume', 0) or 0
-            put_vol = getattr(t, 'putVolume', 0) or 0
+            c_vol = getattr(t, 'callVolume', 0)
+            p_vol = getattr(t, 'putVolume', 0)
+            call_vol = 0 if c_vol is None or math.isnan(float(c_vol)) else int(c_vol)
+            put_vol = 0 if p_vol is None or math.isnan(float(p_vol)) else int(p_vol)
+            
             opt_vol = call_vol + put_vol
             
             # Sanitization for average volume
-            avg_opt_vol = getattr(t, 'avOptionVolume', 1) or 1
+            a_vol = getattr(t, 'avOptionVolume', 1)
+            avg_opt_vol = 1 if a_vol is None or math.isnan(float(a_vol)) else int(a_vol)
             
             if opt_vol > avg_opt_vol and opt_vol >= 1000:
                 logging.info(f"{t.contract.symbol} passed: Option Vol {opt_vol} (> Avg {avg_opt_vol})")
@@ -231,7 +235,7 @@ class Pillar1MarketData:
             
             try:
                 # 1. Manually open the streams for the chunk
-                # genericTickList='100,101' explicitly requests Volume (100) and Open Interest (101)
+                # genericTickList='100,101' explicitly requests Volume (100), Open Interest (101)
                 for contract in chunk:
                     ticker = self.ib.reqMktData(contract, genericTickList='100,101', snapshot=False)
                     chunk_tickers.append(ticker)
@@ -360,11 +364,11 @@ class Pillar1MarketData:
                 oi = 0 if raw_oi is None or math.isnan(float(raw_oi)) else int(raw_oi)
                 
                 # Safely extract and sanitize Volume
-                raw_vol = getattr(ot, 'volume', 0)
-                #if ot.contract.right == 'C':
-                #    raw_vol = getattr(ot, 'callVolume', 0)
-                #else:
-                #    raw_vol = getattr(ot, 'putVolume', 0)
+                #raw_vol = getattr(ot, 'volume', 0)
+                if ot.contract.right == 'C':
+                    raw_vol = getattr(ot, 'callVolume', 0)
+                else:
+                    raw_vol = getattr(ot, 'putVolume', 0)
 
                 vol = 0 if raw_vol is None or math.isnan(float(raw_vol)) else int(raw_vol)
                 total_atm_oi += oi
@@ -424,6 +428,8 @@ class Pillar2SECData:
             cfo_activity_flag = 0
 
             for f in filings:
+                logging.info(f"Processing Form 4 filing {f.accession_no} for {symbol} dated {f.filing_date}...")
+
                 if isinstance(f.filing_date, str):
                     parsed_date = datetime.strptime(f.filing_date, "%Y-%m-%d").date()
                 else:
@@ -431,11 +437,13 @@ class Pillar2SECData:
 
                 days_old = (datetime.now().date() - parsed_date).days
                 if days_old > lookback_days:
+                    logging.info(f"Skipping filing {f.accession_no} for {symbol}: {days_old} days old, beyond lookback window.")    
                     continue
 
                 weight = max(0.1, (lookback_days - days_old) / float(lookback_days))
                 xml_content = f.xml()
                 if not xml_content:
+                    logging.info(f"Skipping filing {f.accession_no} for {symbol}: No XML content available.")
                     continue
                 
                 title_match = re.search(r'<officerTitle>(.*?)</officerTitle>', xml_content, re.IGNORECASE)
@@ -452,6 +460,7 @@ class Pillar2SECData:
                 for trans in transactions:
                     code_match = re.search(r'<transactionCode>(P|S)</transactionCode>', trans)
                     if not code_match:
+                        logging.info(f"Transaction in filing {f.accession_no} for {symbol} is not a purchase or sale, skipping..")
                         continue
                     code = code_match.group(1)
                     
@@ -709,8 +718,9 @@ class ConvergencePipeline:
         
         try:
             logging.info("WEEKEND TEST MODE: Bypassing live TWS scanner...")
-            test_symbols = ["VUZI", "ABCL","ATEN", "SW", "OSPN", "CRBP", "PROP", "L", "NTCT", "CIB", "MEC", "PRM", "TAC", "LBRT", "CPT", "GTES", "MEI", "NMRA", "VTGN", "GETY", "PDFS"] 
-            
+            #test_symbols = ["VUZI", "ABCL","ATEN", "SW", "OSPN", "CRBP", "PROP", "L", "NTCT", "CIB", "MEC", "PRM", "TAC", "LBRT", "CPT", "GTES", "MEI", "NMRA", "VTGN", "GETY", "PDFS"] 
+            test_symbols = ["SNDL", "RGP", "ARAY", "PSN"]
+
             active_tickers = []
             for sym in test_symbols:
                 contract = Stock(sym, 'SMART', 'USD')
@@ -822,4 +832,4 @@ if __name__ == "__main__":
     pipeline = ConvergencePipeline(custom_parser_engine=parser_module)
 
     # Fire the event loop runner
-    asyncio.run(pipeline.execute_daily_build())
+    asyncio.run(pipeline.test_execute_daily_build())
