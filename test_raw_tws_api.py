@@ -33,7 +33,7 @@ from ibapi.contract import Contract
 from ibapi.scanner import ScannerSubscription
 
 # ── Other dependencies (unchanged) ────────────────────────────────────────────
-from edgar import Company, set_identity
+from edgar import Company, set_identity, httpclient
 from filing_parser import MasterParserClass
 import settings as settings
 
@@ -46,6 +46,7 @@ logging.basicConfig(
 
 # Mandatory SEC EDGAR identification string
 set_identity("SpecialSituationsQuant Engine securedhummer@gmail.com")
+#httpclient.update_rate_limiter(requests_per_second=5) # 5 requests per second, to be safe
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,13 +59,17 @@ TICK_LAST            = 4    # Last trade price — STK
 TICK_CLOSE           = 9    # Prior close price — STK
 
 # Sizes / counts (arrive via tickSize callback)
-TICK_VOLUME          = 8    # Day volume — OPT specific contract
-TICK_OPEN_INTEREST   = 22   # Open interest — OPT specific contract (needs generic "101")
-TICK_CALL_VOL        = 29   # Day call volume for underlying — STK (needs generic "100")
-TICK_PUT_VOL         = 30   # Day put volume for underlying — STK (needs generic "100")
+#TICK_VOLUME          = 8    # Day volume — OPT specific contract
+#TICK_OPEN_INTEREST   = 22   # Open interest — OPT specific contract (needs generic "101")
+TICK_CALL_OI         = 27
+TICK_PUT_OI          = 28
+TICK_CALL_VOL_UND        = 29   # Day call volume for underlying — STK (needs generic "100")
+TICK_PUT_VOL_UND         = 30   # Day put volume for underlying — STK (needs generic "100")
+TICK_OPT_CONTRACT_VOLUME = 8   # Day volume for the option contract itself — OPT specific contract (arrives via tickSize or tickGeneric; needs generic "100")
 
 # Average option volume (arrives via tickSize or tickGeneric; needs generic "105")
-TICK_AVG_OPT_VOL     = 105
+GEN_TICK_AVG_OPT_VOL     = 105
+TICK_AVG_OPT_VOL         = 87
 
 
 # ── Informational TWS codes that are not real errors ──────────────────────────
@@ -102,6 +107,7 @@ class TickerSnapshot:
         'last', 'close',
         'callVolume', 'putVolume', 'avOptionVolume',  # STK-level option activity
         'openInterest', 'volume',                       # OPT contract-level
+        'pcRatio',  # Put/Call ratio
     )
 
     def __init__(self, contract: Contract):
@@ -113,7 +119,7 @@ class TickerSnapshot:
         self.avOptionVolume  = None
         self.openInterest    = None
         self.volume          = None
-
+        self.pcRatio         = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # IBKRApp  —  thin EWrapper / EClient
@@ -186,11 +192,11 @@ class IBKRApp(EWrapper, EClient):
 
     # ── Error handling ────────────────────────────────────────────────────────
 
-    def error(self, reqId, errorCode, errorString, advancedOrderRejectJson=""):
+    def error(self, reqId, errorTime, errorCode, errorString, advancedOrderRejectJson=""):
         if errorCode in _TWS_INFO_CODES:
-            logging.debug(f"[TWS info] code={errorCode}: {errorString}")
+            logging.debug(f"[TWS info] code={errorCode}: {errorString} at {errorTime}")
             return
-        logging.error(f"[TWS error] reqId={reqId}, code={errorCode}: {errorString}")
+        logging.error(f"[TWS error] reqId={reqId}, code={errorCode}: {errorString} at {errorTime}")
         # Unblock any waiter so we don't deadlock on fatal errors (200, 321, 502…)
         if reqId > 0:
             self._signal(reqId)
@@ -202,8 +208,15 @@ class IBKRApp(EWrapper, EClient):
         slot = self._get(reqId)
         rows = slot.get("rows")
         if rows is not None:
+            contract = contractDetails.contract
+            logging.info(
+                f"Scanner raw fields — {contract.symbol}: "
+                f"distance={distance!r}, benchmark={benchmark!r}, "
+                f"projection={projection!r}, legsStr={legsStr!r}"
+            )
+        
             rows.append({
-                "contract":   contractDetails.contract,
+                "contract":   contract,
                 "projection": projection,
             })
 
@@ -305,7 +318,7 @@ class Pillar1MarketData:
     QUALIFY_TIMEOUT  = 15.0   # seconds: per contract-details request
     QUALIFY_DELAY    = 0.05   # seconds: pacing pause between batched qualifications
 
-    def __init__(self, host='127.0.0.1', port=7496, client_id=1):
+    def __init__(self, host='127.0.0.1', port=4001, client_id=1): # TWS Port=7496, Paper=7497, Live GW=4001, Paper GW=4002
         self._app      = IBKRApp()
         self.host      = host
         self.port      = port
@@ -424,10 +437,10 @@ class Pillar1MarketData:
         Synchronous replacement for async scan_accumulation_candidates().
 
         Fires reqScannerData, waits for scannerDataEnd, then filters by exchange.
-        The scanner's contractDetails already have primaryExch populated, so a
+        The scanner's contractDetails already have primaryExchange populated, so a
         separate qualification pass is only needed when conId is missing.
 
-        Returns: (valid_contracts: list[Contract], pc_ratios: dict[conId → float])
+        Returns: valid_contracts: list[Contract]
         """
         logging.info("Executing TWS Scanner: Low P/C Volume Ratio...")
 
@@ -439,9 +452,10 @@ class Pillar1MarketData:
         rid = self._app._next_req_id()
         self._app._alloc(rid)
         # scannerSubscriptionOptions and scannerSubscriptionFilterOptions = [] (none)
-        self._app.reqScannerData(rid, sub, [], [])
+        self._app.reqScannerSubscription(rid, sub, [], [])
         ok = self._app._wait(rid, timeout=self.SCANNER_TIMEOUT)
         self._app.cancelScannerSubscription(rid)  # clean up regardless of outcome
+        time.sleep(0.2)
 
         if not ok:
             logging.error("Scanner request timed out.")
@@ -452,20 +466,20 @@ class Pillar1MarketData:
 
         valid_exchanges  = {'NYSE', 'NASDAQ', 'AMEX', 'ARCA', 'BATS'}
         valid_contracts  = []
-        pc_ratios        = {}
 
-        for row in scan_rows:
+        for i, row in enumerate(scan_rows):
             contract   = row["contract"]
             projection = row["projection"]
 
-            # ibapi uses primaryExch (not primaryExchange as in ib_async)
             primary_exch = (
-                getattr(contract, 'primaryExch', '') or
+                getattr(contract, 'primaryExchange', '') or
                 getattr(contract, 'exchange',    '')
             )
 
+            logging.info(f'Inspecting scanner result {i}: {contract.symbol} on {primary_exch} with projection {projection}...')
+
             if primary_exch not in valid_exchanges:
-                logging.debug(
+                logging.info(
                     f"Filtered {contract.symbol}: exchange '{primary_exch}' not in valid set."
                 )
                 continue
@@ -474,21 +488,17 @@ class Pillar1MarketData:
             if not getattr(contract, 'conId', 0):
                 qualified = self._qualify_one(contract)
                 if not qualified:
+                    logging.warning(f"Could not qualify scanner result {contract.symbol} on {primary_exch}; skipping.")
                     continue
                 contract = qualified
 
-            pc_ratio = float(projection) if projection else 0.0
             valid_contracts.append(contract)
-            pc_ratios[contract.conId] = pc_ratio
-            logging.info(
-                f"Scanner candidate: {contract.symbol} on {primary_exch}, "
-                f"P/C Ratio={pc_ratio:.4f}"
-            )
+            logging.info(f"Scanner candidate validated: {contract.symbol} on {primary_exch}")
 
             if len(valid_contracts) >= limit:
                 break
 
-        return valid_contracts, pc_ratios
+        return valid_contracts
 
     # ── STK market data snapshot (volume filter) ──────────────────────────────
 
@@ -530,13 +540,15 @@ class Pillar1MarketData:
             ticker.last  = ticks.get(TICK_LAST) or ticks.get(TICK_CLOSE)
             ticker.close = ticks.get(TICK_CLOSE)
 
-            call_vol = _safe_int(ticks.get(TICK_CALL_VOL))
-            put_vol  = _safe_int(ticks.get(TICK_PUT_VOL))
+            call_vol = _safe_int(ticks.get(TICK_CALL_VOL_UND))
+            put_vol  = _safe_int(ticks.get(TICK_PUT_VOL_UND))
             avg_vol  = _safe_int(ticks.get(TICK_AVG_OPT_VOL), default=1) or 1  # avoid /0
 
             ticker.callVolume     = call_vol
             ticker.putVolume      = put_vol
             ticker.avOptionVolume = avg_vol
+
+            ticker.pcRatio = round(put_vol / call_vol, 4) if call_vol > 0 else 0.0
 
             opt_vol = call_vol + put_vol
             if opt_vol > avg_vol and opt_vol >= 1000:
@@ -546,7 +558,7 @@ class Pillar1MarketData:
                 )
                 valid_candidates.append(ticker)
             else:
-                logging.debug(
+                logging.info(
                     f"{ticker.contract.symbol} filtered: opt_vol={opt_vol}, avg={avg_vol}"
                 )
 
@@ -570,9 +582,10 @@ class Pillar1MarketData:
 
         ticker.last           = ticks.get(TICK_LAST) or ticks.get(TICK_CLOSE)
         ticker.close          = ticks.get(TICK_CLOSE)
-        ticker.callVolume     = _safe_int(ticks.get(TICK_CALL_VOL))
-        ticker.putVolume      = _safe_int(ticks.get(TICK_PUT_VOL))
+        ticker.callVolume     = _safe_int(ticks.get(TICK_CALL_VOL_UND))
+        ticker.putVolume      = _safe_int(ticks.get(TICK_PUT_VOL_UND))
         ticker.avOptionVolume = _safe_int(ticks.get(TICK_AVG_OPT_VOL), default=1) or 1
+        ticker.pcRatio = round(ticker.putVolume / ticker.callVolume, 4) if ticker.callVolume > 0 else 0.0
         return ticker
 
     # ── Volatility contraction detection (pure pandas — unchanged) ────────────
@@ -726,6 +739,11 @@ class Pillar1MarketData:
         Streams are cancelled after the wait, honouring IBKR's active-line limit.
 
         NOTE on tick types for OPT contracts:
+          TICK_CALL_VOL (29)       → day's call volume
+          TICK_PUT_VOL (30)        → day's put volume
+          TICK_CALL_OI (27)         → call open interest 
+          TICK_PUT_OI (28)          → put open interest
+
           TICK_VOLUME (8)        → day's volume for this specific option
           TICK_OPEN_INTEREST (22)→ open interest for this specific option
         """
@@ -737,39 +755,59 @@ class Pillar1MarketData:
             chunk_rids: dict[int, TickerSnapshot] = {}
 
             try:
-                # 1. Open all streams in the chunk at once
+                
+                # --- Pass 1: Type 1 live streaming → OI (ticks 27/28, weekend-safe) ---
+                self._app.reqMarketDataType(1)
                 for contract in chunk:
                     rid    = self._app._next_req_id()
                     ticker = TickerSnapshot(contract)
                     self._app._alloc(rid, ticks={})
                     chunk_rids[rid] = ticker
-                    self._app.reqMktData(rid, contract, '100,101', False, False, [])
+                    self._app.reqMktData(rid, contract, '101', False, False, [])
 
-                # 2. Mirror original asyncio.sleep(10.0) — OI ticks can be slow
                 time.sleep(self.OPT_STREAM_WAIT)
 
-                # 3. Collect results and cancel streams
+                chunk_tickers = []
                 for rid, ticker in chunk_rids.items():
                     ticks = self._app._get(rid).get("ticks", {})
                     self._app.cancelMktData(rid)
-
                     if ticker.contract is None:
-                        logging.warning("Received malformed ticker object from IBKR. Skipping.")
                         continue
+                    if ticker.contract.right == 'C':
+                        ticker.openInterest = _safe_int(ticks.get(TICK_CALL_OI))
+                    elif ticker.contract.right == 'P':
+                        ticker.openInterest = _safe_int(ticks.get(TICK_PUT_OI))
+                    chunk_tickers.append(ticker)
 
-                    ticker.volume       = _safe_int(ticks.get(TICK_VOLUME))
-                    ticker.openInterest = _safe_int(ticks.get(TICK_OPEN_INTEREST))
-                    all_tickers.append(ticker)
+                # --- Pass 2: Type 2 frozen streaming → volume (tick 8, weekend-safe) ---
+                self._app.reqMarketDataType(2)
+                vol_rids: dict[int, TickerSnapshot] = {}
+                for ticker in chunk_tickers:
+                    rid = self._app._next_req_id()
+                    self._app._alloc(rid, ticks={})
+                    vol_rids[rid] = ticker
+                    self._app.reqMktData(rid, ticker.contract, '100', False, False, [])  
+
+                time.sleep(5.0)  # frozen ticks are served from cache, arrive fast
+
+                for rid, ticker in vol_rids.items():
+                    ticks = self._app._get(rid).get("ticks", {})
+                    self._app.cancelMktData(rid)
+                    ticker.volume = _safe_int(ticks.get(TICK_OPT_CONTRACT_VOLUME))
+
+                self._app.reqMarketDataType(1)  # restore
+                all_tickers.extend(chunk_tickers)
 
             except Exception as e:
                 logging.error(f"Error during chunked ticker fetch: {e}")
+                self._app.reqMarketDataType(1)
                 for rid in chunk_rids:
                     try:
                         self._app.cancelMktData(rid)
                     except Exception:
                         pass
                 continue
-
+        
         return all_tickers
 
     # ── Positioning footprint ─────────────────────────────────────────────────
@@ -1264,13 +1302,19 @@ class ConvergencePipeline:
         symbol          = feature_row.get("symbol", "N/A")
         dist_200dma     = feature_row.get("dist_to_200dma", 0)
         ic_score        = feature_row.get("insider_conviction_score", 0)
+        oi_skew          = feature_row.get("leap_oi_skews", 1.0)
         regime          = feature_row.get("market_regime", "")
         contraction_mean = float(feature_row.get("contraction_mean", float('nan')))
 
         if ic_score < 0:
             logging.info(f"Filtering out {symbol}: negative insider conviction ({ic_score}).")
             return False
+        
+        if oi_skew <= 1.0:
+            logging.info(f"Filtering out {symbol}: leap_oi_skews ({oi_skew}) out of bounds.")
+            return False
 
+        '''
         if regime != "Accumulation Base":
             logging.info(f"Filtering out {symbol}: regime '{regime}' ≠ 'Accumulation Base'.")
             return False
@@ -1291,6 +1335,7 @@ class ConvergencePipeline:
                 f"({contraction_mean:.2f} >= 0.45)."
             )
             return False
+        '''
 
         return True
 
@@ -1305,7 +1350,7 @@ class ConvergencePipeline:
         self.ib_broker.connect()   # was: await self.ib_broker.connect_async()
 
         try:
-            raw_contracts, pc_ratios = self.ib_broker.scan_accumulation_candidates(limit=75)
+            raw_contracts = self.ib_broker.scan_accumulation_candidates(limit=75)
 
             active_tickers = self.ib_broker.fetch_ticker_snapshots(raw_contracts)
 
@@ -1334,7 +1379,7 @@ class ConvergencePipeline:
                     "timestamp":              datetime.now().strftime("%Y-%m-%d"),
                     "symbol":                 sym,
                     "last_price":             last_price,
-                    "put_call_ratio":         float(pc_ratios.get(t.contract.conId, 0.0)),
+                    "put_call_ratio":         float(t.pcRatio) if t.pcRatio else 0.00,
                     "call_volume":            int(t.callVolume)      if t.callVolume      else 0,
                     "put_volume":             int(t.putVolume)       if t.putVolume       else 0,
                     "opt_volume":             int((t.callVolume or 0) + (t.putVolume or 0)),
@@ -1359,7 +1404,7 @@ class ConvergencePipeline:
                 }
 
                 if not self._passes_advanced_filter(feature_row):
-                    pass  # continue
+                    continue
                 self.feature_store.append(feature_row)
 
         finally:
@@ -1441,7 +1486,7 @@ class ConvergencePipeline:
                 }
 
                 if not self._passes_advanced_filter(feature_row):
-                    pass  # continue
+                    continue
                 self.feature_store.append(feature_row)
 
         finally:
@@ -1515,7 +1560,7 @@ def internal_sec_filing_fetcher(symbol, forms, days_lookback):
                 })
 
     except Exception as err:
-        logging.debug(
+        logging.warning(
             f"Historical filing pull cancelled for {symbol}: {err}"
         )
 
