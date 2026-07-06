@@ -1,0 +1,5 @@
+timestamp,symbol,last_price,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,bb_width_pct_daily,bb_width_pct_weekly,leap_volume_skews,dominant_expiry,atm_oi_depth,insider_conviction_score,cfo_involved,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-24,IMMR,6.27,1.0,Bearish/Distribution,0,-0.045,0.582,0.83,73.0,None,0,0.0,0,0.0,0,None,0.0,0
+2026-05-24,CODI,11.46,1.0,Bullish Trend,0,0.552,0.016,0.755,45.0,None,0,0.121,0,0.0,0,None,0.0,0
+2026-05-24,AAPL,308.82,1.0,Bullish Trend,0,0.181,0.88,0.83,2.61,None,0,-104.898,1,0.0,0,None,0.0,0
+2026-05-24,GLNG,52.36,1.0,Bullish Trend,0,0.199,0.57,0.17,0.37,None,0,0.0,0,0.0,0,None,0.0,0

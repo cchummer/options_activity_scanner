@@ -1,0 +1,20 @@
+timestamp,symbol,last_price,put_call_ratio,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,insider_conviction_score,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-21,TFIN,,0.0,30.25,Bullish Trend,1,0.115,0.467,0.0,1,Activism / Spinoff,0.283,1
+2026-05-21,CYRX,,0.0,40.95,Bullish Trend,0,0.49,0.0,0.0,1,Management Alignment,0.412,0
+2026-05-21,PUMP,18.36,0.0,27.52,Bullish Trend,0,0.707,0.0,0.0,1,Management Alignment,0.405,0
+2026-05-21,MRLN,7.48,0.0,6.73,Bearish/Distribution,0,-0.313,0.0,0.0,1,Management Alignment,0.326,0
+2026-05-21,GERN,,0.0,1.32,Bearish/Distribution,0,-0.105,0.0,0.0,1,Management Alignment,0.387,0
+2026-05-21,MESO,,0.0,1.09,Bearish/Distribution,1,-0.082,20.814,0.0,0,None,0.0,0
+2026-05-21,LCTX,,0.0,5.27,Bearish/Distribution,0,-0.167,0.005,0.0,0,None,0.0,0
+2026-05-21,PBA,,0.0,26.78,Bullish Trend,0,0.208,0.0,0.0,0,None,0.0,0
+2026-05-21,OTLK,0.34,0.0,15.34,Bearish/Distribution,0,-0.664,0.0,0.0,0,None,0.0,0
+2026-05-21,LBRT,,0.0,9.95,Bullish Trend,1,0.576,0.0,0.0,0,None,0.0,0
+2026-05-21,GTES,,0.0,6.41,Accumulation Base,1,-0.004,0.0,0.0,0,None,0.0,0
+2026-05-21,IVVD,,0.0,4.58,Bearish/Distribution,0,-0.338,0.0,0.0,0,None,0.0,0
+2026-05-21,TAC,,0.0,4.52,Accumulation Base,1,-0.0,0.0,0.0,0,None,0.0,0
+2026-05-21,YCL,,0.0,4.09,Accumulation Base,1,-0.076,0.0,0.0,0,None,0.0,0
+2026-05-21,GETY,,0.0,3.09,Bearish/Distribution,0,-0.248,0.0,0.0,0,None,0.0,0
+2026-05-21,ITT,,0.0,3.05,Bullish Trend,0,0.033,0.0,0.0,0,None,0.0,0
+2026-05-21,TKR,,0.0,2.69,Bullish Trend,0,0.315,0.0,0.0,0,None,0.0,0
+2026-05-21,NNOX,1.9,0.0,2.36,Bearish/Distribution,0,-0.385,0.0,0.0,0,None,0.0,0
+2026-05-21,CXW,,0.0,1.53,Bullish Trend,1,0.094,0.0,0.0,0,None,0.0,0

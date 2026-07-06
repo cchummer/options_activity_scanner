@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{ title or "Scanner Dashboard" }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; }
+    th { background: #f4f4f4; }
+    .nav a { margin-right: 12px; }
+    .chart { margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <a href="/">Home</a>
+    <a href="/weekly">Rolling 7d</a>
+    <a href="/monthly">Rolling 30d</a>
+  </div>
+  {% block content %}{% endblock %}
+</body>
+</html>

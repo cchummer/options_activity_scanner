@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Rolling {{ days }} Trading Days</h2>
+
+<h3>Tickers appearing multiple days</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Symbol</th>
+      <th>Appearances</th>
+      <th>Days</th>
+      <th>Industry</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.symbol }}</td>
+        <td>{{ r.appearances }}</td>
+        <td>{{ r.days | join(', ') }}</td>
+        <td>{{ r.industry }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>Industry Breakdown</h3>
+<table>
+  <thead>
+    <tr>
+      <th>Industry</th>
+      <th>Tickers</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in industries %}
+      <tr>
+        <td>{{ r.industry }}</td>
+        <td>{{ r.ticker_count }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

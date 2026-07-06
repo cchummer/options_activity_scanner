@@ -1,0 +1,20 @@
+timestamp,symbol,last_price,put_call_ratio,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,insider_conviction_score,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-22,ATEN,,0.0,47.9,Bullish Trend,1,0.463,0.0,0.0,1,Management Alignment,0.527,0
+2026-05-22,SW,,0.0,36.09,Bearish/Distribution,0,-0.077,0.0,0.0,1,Management Alignment,0.348,0
+2026-05-22,OSPN,,0.0,23.0,Bullish Trend,0,0.027,0.0,0.0,1,Management Alignment,0.33,0
+2026-05-22,CRBP,,0.0,1.13,Bullish Trend,0,0.094,0.0,0.0,1,Management Alignment,0.38,0
+2026-05-22,PROP,,0.0,3.55,Bearish/Distribution,0,-0.475,0.078,0.0,0,None,0.0,0
+2026-05-22,L,,0.0,302.71,Accumulation Base,1,0.045,0.0,0.0,0,None,0.0,0
+2026-05-22,NTCT,,0.0,37.24,Bullish Trend,0,0.432,0.0,0.0,0,None,0.0,0
+2026-05-22,CIB,,0.0,15.03,Accumulation Base,1,0.028,0.0,0.0,0,None,0.0,0
+2026-05-22,MEC,,0.0,7.48,Bullish Trend,0,0.419,0.0,0.0,0,None,0.0,0
+2026-05-22,PRM,,0.0,6.18,Bullish Trend,0,0.23,0.0,0.0,0,None,0.0,0
+2026-05-22,TAC,,0.0,4.34,Accumulation Base,1,0.004,0.0,0.0,0,None,0.0,0
+2026-05-22,LBRT,,0.0,3.88,Bullish Trend,1,0.519,0.0,0.0,0,None,0.0,0
+2026-05-22,CPT,,0.0,2.94,Accumulation Base,1,0.021,0.0,0.0,0,None,0.0,0
+2026-05-22,GTES,,0.0,2.53,Accumulation Base,1,0.013,0.0,0.0,0,None,0.0,0
+2026-05-22,MEI,,0.0,1.78,Bullish Trend,0,0.504,0.0,0.0,0,None,0.0,0
+2026-05-22,NMRA,,0.0,1.56,Bearish/Distribution,0,-0.155,0.0,0.0,0,None,0.0,0
+2026-05-22,VTGN,,0.0,1.48,Bearish/Distribution,0,-0.688,0.0,0.0,0,None,0.0,0
+2026-05-22,GETY,,0.0,1.46,Bearish/Distribution,0,-0.224,0.0,0.0,0,None,0.0,0
+2026-05-22,PDFS,,0.0,1.35,Bullish Trend,0,0.497,0.0,0.0,0,None,0.0,0

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Scan: {{ date_str }}</h2>
+
+<style>
+  /* 1. Wrap the table to allow independent horizontal scrolling */
+  .table-container {
+    width: 100%;
+    max-height: 70vh; /* Limits table height so a scrollbar appears when you scroll down */
+    overflow: auto;   /* Enables both horizontal and vertical scrolling */
+  }
+  
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  /* 2. Highlight effect on click */
+  tr.selected-row {
+    background-color: #fff3cd !important; /* Soft warm yellow highlight */
+  }
+  
+  tr:hover {
+    background-color: #f5f5f5; /* Subtle hover effect for easier scanning */
+  }
+
+  th, td {
+    border: 1px solid #ddd;
+    padding: 8px;
+    text-align: left;
+  }
+
+  /* 3. Sticky Column & Header Magic */
+  th {
+    position: sticky;
+    top: 0;
+    background-color: #eee;
+    z-index: 4; /* Keeps headers above scrolling body rows */
+  }
+
+  .sticky-col-1 {
+    position: sticky;
+    left: 0;
+    background-color: #fff;
+    z-index: 2;
+  }
+  
+  .sticky-col-2 {
+    position: sticky;
+    left: 50px; /* Adjust this value if your Links column is wider/narrower */
+    background-color: #fff;
+    z-index: 2;
+    font-weight: bold;
+  }
+  
+  /* 4. Intersections: Top-left corner cells must stay pinned both ways */
+  th.sticky-col-1 {
+    z-index: 5;
+    left: 0;
+  }
+  th.sticky-col-2 {
+    z-index: 5;
+    left: 50px;
+  }
+  
+  /* Simple vertical stack for links */
+  .link-stack a {
+    display: block;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+</style>
+
+{% if selected_symbol %}
+<div class="chart">
+  <div id="tv-chart"></div>
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <script>
+    new TradingView.widget({
+      "container_id": "tv-chart",
+      "symbol": "{{ selected_symbol }}",
+      "interval": "D",
+      "width": "100%",
+      "height": 400,
+      "theme": "light"
+    });
+  </script>
+</div>
+{% endif %}
+
+<div class="table-container">
+  <table>
+    <thead>
+      <tr>
+        <th class="sticky-col-1">Links</th>
+        <th class="sticky-col-2">Symbol</th>
+        {% for c in columns %}
+          {% if c != 'symbol' %}
+            <th>{{ c }}</th>
+          {% endif %}
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        <tr onclick="toggleRowHighlight(this)">
+          <td class="sticky-col-1">
+            <div class="link-stack">
+              <a href="/day/{{ date_str }}?symbol={{ r.symbol }}">Chart</a>
+              <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a>
+              <a href="{{ sec_url(r.symbol, '8-K') }}" target="_blank">8-K</a>
+              <a href="{{ sec_url(r.symbol, '10-Q') }}" target="_blank">10-Q</a>
+              <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
+            </div>
+          </td>
+          <td class="sticky-col-2">{{ r.symbol }}</td>
+          {% for c in columns %}
+            {% if c != 'symbol' %}
+              <td>{{ r[c] }}</td>
+            {% endif %}
+          {% endfor %}
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  // Simple JavaScript function to handle row selection
+  function toggleRowHighlight(row) {
+    row.classList.toggle('selected-row');
+  }
+</script>
+{% endblock %}

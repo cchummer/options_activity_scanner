@@ -1,0 +1,16 @@
+timestamp,symbol,last_price,put_call_ratio,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,insider_conviction_score,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-20,AME,225.0,0.0,8.63,Bullish Trend,1,0.083,0.0,0.0,1,Management Alignment,0.259,0
+2026-05-20,MESO,,0.0,1.34,Bearish/Distribution,1,-0.11,21.231,0.0,0,None,0.0,0
+2026-05-20,SABR,1.5809,0.0,7.18,Bearish/Distribution,0,-0.033,6.994,0.0,0,None,0.0,0
+2026-05-20,APLE,,0.0,14.08,Bullish Trend,1,0.189,0.064,0.0,0,None,0.0,0
+2026-05-20,GETY,0.9945,0.0,16.91,Bearish/Distribution,0,-0.279,0.0,0.0,0,None,0.0,0
+2026-05-20,MNR,,0.0,12.01,Bullish Trend,0,0.151,0.0,0.0,0,None,0.0,0
+2026-05-20,DOC,19.53,0.0,5.93,Bullish Trend,0,0.123,0.0,0.0,0,None,0.0,0
+2026-05-20,TBF,25.09,0.0,5.87,Accumulation Base,1,0.044,0.0,0.0,0,None,0.0,0
+2026-05-20,PGNY,,0.0,4.96,Bullish Trend,0,0.176,0.0,0.0,0,None,0.0,0
+2026-05-20,MHK,100.42,0.0,2.82,Bearish/Distribution,0,-0.136,0.0,0.0,0,None,0.0,0
+2026-05-20,AEXA,11.43,0.0,2.34,Insufficient Data,0,0.0,0.0,0.0,0,None,0.0,0
+2026-05-20,DEI,11.54,0.0,2.16,Bearish/Distribution,0,-0.051,0.0,0.0,0,None,0.0,0
+2026-05-20,CRBP,,0.0,1.8,Bearish/Distribution,0,-0.06,0.0,0.0,0,None,0.0,0
+2026-05-20,CTMX,3.7394,0.0,1.12,Bearish/Distribution,0,-0.055,0.0,0.0,0,None,0.0,0
+2026-05-20,ITT,193.34,0.0,1.07,Bullish Trend,0,0.037,0.0,0.0,0,None,0.0,0

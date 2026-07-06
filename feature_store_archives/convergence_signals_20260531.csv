@@ -1,0 +1,5 @@
+timestamp,symbol,last_price,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,contraction_mean,contraction_median,triangle_flag,high_slope,low_slope,leap_volume_skews,dominant_expiry_by_vol,dominant_expiry_by_oi,atm_oi_depth,leap_oi_skews,insider_conviction_score,cfo_involved,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-31,PSN,59.1,1.0,Bearish/Distribution,0,-0.14268244653188944,1.5234362310716636,1.6671409633608418,0,-0.8461504273504283,-0.7169709401709426,0.0,None,None,0,0.0,2.534,1,0.0,0,None,0.0,0
+2026-05-31,SNDL,1.48,1.0,Bearish/Distribution,0,-0.18408975012748588,0.9617570514788559,1.041661805187002,0,-0.021167076923076927,-0.01529336752136755,0.0,None,None,0,0.0,0.0,0,0.0,0,None,0.0,0
+2026-05-31,RGP,4.52,1.0,Bullish Trend,0,0.010948211270283179,1.3374194545553526,1.4126281606983224,0,-0.04237948717948726,-0.04348717948717944,0.0,None,None,0,0.0,0.0,1,0.0,0,None,0.0,0
+2026-05-31,ARAY,0.3784,1.0,Bearish/Distribution,0,-0.5964383336657242,2.227283569671493,2.3416251800543915,0,-0.03055039316239318,-0.0290654358974359,0.0,None,None,0,0.0,0.0,0,0.0,0,None,0.0,0

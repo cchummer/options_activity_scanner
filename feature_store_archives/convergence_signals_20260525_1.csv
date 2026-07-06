@@ -1,0 +1,20 @@
+timestamp,symbol,last_price,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,bb_width_pct_daily,bb_width_pct_weekly,leap_volume_skews,dominant_expiry_by_vol,dominant_expiry_by_oi,atm_oi_depth,leap_oi_skews,insider_conviction_score,cfo_involved,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-25,PROP,0.9519,1.0,Bearish/Distribution,0,-0.475,0.773,0.83,6987.0,20260918,None,0,0.0,0.075,1,0.0,0,None,0.0,0
+2026-05-25,GTES,24.48,1.0,Bullish Trend,0,0.013,0.582,0.434,4003.0,20260821,None,0,0.0,0.0,1,0.0,0,None,0.0,0
+2026-05-25,OSPN,13.12,1.0,Bullish Trend,0,0.027,0.586,0.585,2158.0,20261218,None,0,0.0,-0.051,1,0.0,1,Management Alignment,0.33,0
+2026-05-25,PRM,31.1,1.0,Bullish Trend,0,0.23,0.55,0.811,2121.0,20261016,None,0,0.0,-37.792,1,0.0,0,None,0.0,0
+2026-05-25,VTGN,0.647,1.0,Bearish/Distribution,0,-0.688,0.124,0.094,1020.0,20260821,None,0,0.0,0.0,1,0.0,0,None,0.0,0
+2026-05-25,ATEN,29.16,1.0,Bullish Trend,0,0.463,0.426,0.736,373.0,20260821,None,0,0.0,-0.53,1,0.0,1,Management Alignment,0.527,0
+2026-05-25,TAC,13.57,1.0,Bullish Trend,0,0.004,0.215,0.302,87.0,20261120,None,0,0.0,0.0,0,0.0,0,None,0.0,0
+2026-05-25,GETY,1.07,1.0,Bearish/Distribution,0,-0.224,0.837,0.509,58.0,20261120,None,0,0.0,-0.185,1,0.0,0,None,0.0,0
+2026-05-25,CRBP,11.35,1.0,Bullish Trend,0,0.094,0.51,0.34,57.0,20260918,None,0,0.0,-0.005,0,0.0,1,Management Alignment,0.38,0
+2026-05-25,MEC,25.45,1.0,Bullish Trend,0,0.419,0.761,0.811,38.0,20261016,None,0,0.0,-0.503,1,0.0,0,None,0.0,0
+2026-05-25,PDFS,46.09,1.0,Bullish Trend,0,0.497,0.765,0.774,17.0,20260821,None,0,0.0,0.0,0,0.0,0,None,0.0,0
+2026-05-25,L,108.87,1.0,Bullish Trend,0,0.045,0.857,0.472,17.0,20260918,None,0,0.0,-1.644,0,0.0,0,None,0.0,0
+2026-05-25,MEI,11.24,1.0,Bullish Trend,0,0.504,0.793,0.83,9.0,20261016,None,0,0.0,0.0,0,0.0,0,None,0.0,0
+2026-05-25,LBRT,31.84,1.0,Bullish Trend,0,0.519,0.012,0.472,5.0,20261218,None,0,0.0,-1.142,1,0.0,0,None,0.0,0
+2026-05-25,SW,38.05,1.0,Bearish/Distribution,0,-0.077,0.625,0.17,3.0,20261016,None,0,0.0,0.0,1,0.0,1,Management Alignment,0.348,0
+2026-05-25,NTCT,41.01,1.0,Bullish Trend,0,0.432,0.896,0.83,3.0,20260918,None,0,0.0,-0.586,1,0.0,0,None,0.0,0
+2026-05-25,CIB,65.88,1.0,Bullish Trend,0,0.028,0.299,0.34,2.0,20261120,None,0,0.0,0.0,1,0.0,0,None,0.0,0
+2026-05-25,CPT,107.47,1.0,Bullish Trend,0,0.021,0.219,0.528,1.0,20260821,None,0,0.0,0.0,1,0.0,0,None,0.0,0
+2026-05-25,NMRA,1.85,1.0,Bearish/Distribution,0,-0.155,0.625,0.132,0.0,None,None,0,0.0,0.0,0,0.0,0,None,0.0,0

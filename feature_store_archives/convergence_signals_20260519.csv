@@ -1,0 +1,31 @@
+timestamp,symbol,last_price,put_call_ratio,opt_vol_expansion_ratio,market_regime,is_coiling,dist_to_200dma,insider_conviction_score,debt_reduction_pct,catalyst_flag,catalyst_type,catalyst_confidence,has_activist_pressure
+2026-05-19,MESO,,0.0,1.18,Bearish/Distribution,1,-0.109,21.648,0.0,0,None,0.0,0
+2026-05-19,TENB,25.3,0.0,31.9,Bullish Trend,0,0.022,0.218,0.0,0,None,0.0,0
+2026-05-19,AZTA,17.8,0.0,128.04,Bearish/Distribution,0,-0.401,0.164,0.0,0,None,0.0,0
+2026-05-19,MSGE,68.81,0.0,136.68,Bullish Trend,1,0.305,0.0,0.0,0,None,0.0,0
+2026-05-19,DBI,6.24,0.0,99.61,Bullish Trend,0,0.128,0.0,0.0,0,None,0.0,0
+2026-05-19,AMPG,4.09,0.0,39.49,Bullish Trend,0,0.285,0.0,0.0,0,None,0.0,0
+2026-05-19,OILK,60.98,0.0,24.16,Bullish Trend,1,0.39,0.0,0.0,0,None,0.0,0
+2026-05-19,WTTR,20.19,0.0,22.5,Bullish Trend,0,0.66,0.0,0.0,0,None,0.0,0
+2026-05-19,CXAI,0.1682,0.0,18.49,Bearish/Distribution,0,-0.622,0.0,0.0,0,None,0.0,0
+2026-05-19,WEAV,5.8,0.0,13.17,Bearish/Distribution,0,-0.087,0.0,0.0,0,None,0.0,0
+2026-05-19,GLAD,19.29,0.0,12.08,Bearish/Distribution,1,-0.081,0.0,0.0,0,None,0.0,0
+2026-05-19,TBF,25.49,0.0,6.66,Accumulation Base,1,0.055,0.0,0.0,0,None,0.0,0
+2026-05-19,IGM,151.62,0.0,5.69,Bullish Trend,0,0.181,0.0,0.0,0,None,0.0,0
+2026-05-19,BL,30.08,0.0,5.41,Bearish/Distribution,0,-0.36,0.0,0.0,0,None,0.0,0
+2026-05-19,TBCH,10.48,0.0,3.72,Bearish/Distribution,0,-0.229,0.0,0.0,0,None,0.0,0
+2026-05-19,ENLV,0.7045,0.0,3.55,Bearish/Distribution,0,-0.311,0.0,0.0,0,None,0.0,0
+2026-05-19,VTGN,0.6301,0.0,3.2,Bearish/Distribution,0,-0.701,0.0,0.0,0,None,0.0,0
+2026-05-19,YELP,22.59,0.0,3.01,Bearish/Distribution,0,-0.209,0.0,0.0,0,None,0.0,0
+2026-05-19,VISN,11.14,0.0,2.73,Bearish/Distribution,0,-0.341,0.0,0.0,0,None,0.0,0
+2026-05-19,MNR,15.0,0.0,2.3,Bullish Trend,0,0.163,0.0,0.0,0,None,0.0,0
+2026-05-19,SPRO,2.5319,0.0,1.81,Bullish Trend,0,0.114,0.0,0.0,0,None,0.0,0
+2026-05-19,BEEM,1.4,0.0,1.68,Bearish/Distribution,0,-0.31,0.0,0.0,0,None,0.0,0
+2026-05-19,MCFT,22.0,0.0,1.45,Bullish Trend,0,0.036,0.0,0.0,0,None,0.0,0
+2026-05-19,BTCZ,4.11,0.0,1.39,Bullish Trend,0,0.035,0.0,0.0,0,None,0.0,0
+2026-05-19,DLTH,3.15,0.0,1.36,Bullish Trend,0,0.109,0.0,0.0,0,None,0.0,0
+2026-05-19,CXDO,9.86,0.0,1.33,Bullish Trend,0,0.455,0.0,0.0,0,None,0.0,0
+2026-05-19,IYW,235.21,0.0,1.29,Bullish Trend,0,0.187,0.0,0.0,0,None,0.0,0
+2026-05-19,DSGN,10.49,0.0,1.17,Bullish Trend,0,0.168,0.0,0.0,0,None,0.0,0
+2026-05-19,RLMD,6.96,0.0,1.11,Bullish Trend,0,0.766,0.0,0.0,0,None,0.0,0
+2026-05-19,VOYA,80.0,0.0,1.09,Bullish Trend,1,0.084,0.0,0.0,0,None,0.0,0
