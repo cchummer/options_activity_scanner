@@ -18,6 +18,18 @@
     <a href="/weekly">Rolling 7d</a>
     <a href="/monthly">Rolling 30d</a>
   </div>
-  {% block content %}{% endblock %}
+  <form action="{{ url_for('search') }}" method="get" style="margin-bottom: 1.5rem;">
+    <input
+      type="text"
+      name="symbol"
+      placeholder="Search ticker (e.g. AAPL)"
+      style="text-transform: uppercase;"
+      autocomplete="off"
+      required
+    >
+    <button type="submit">Go</button>
+  </form>
+  {% block content %}
+  {% endblock %}
 </body>
 </html>

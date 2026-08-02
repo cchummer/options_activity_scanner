@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ symbol }}</h1>
+
+{% if not found %}
+  <p>No appearances of <strong>{{ symbol }}</strong> found in the archive.</p>
+{% else %}
+  <p>{{ rows|length }} appearance(s) found, most recent first.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Scan Date</th>
+        {% for col in columns %}
+          {% if col != 'symbol' %}
+            <th>{{ col }}</th>
+          {% endif %}
+        {% endfor %}
+        <th>SEC Filings</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>
+          <a href="{{ url_for('day_view', date_str=row['scan_date'], symbol=symbol) }}">
+            {{ row['scan_date'] }}
+          </a>
+        </td>
+        {% for col in columns %}
+          {% if col != 'symbol' %}
+            <td>{{ row[col] }}</td>
+          {% endif %}
+        {% endfor %}
+        <td><a href="{{ sec_url(symbol) }}" target="_blank">EDGAR</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}

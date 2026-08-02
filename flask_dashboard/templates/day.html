@@ -113,7 +113,7 @@
               <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
             </div>
           </td>
-          <td class="sticky-col-2">{{ r.symbol }}</td>
+          <td class="sticky-col-2"><a href="{{ url_for('ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
           {% for c in columns %}
             {% if c != 'symbol' %}
               <td>{{ r[c] }}</td>

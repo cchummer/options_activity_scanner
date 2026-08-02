@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, abort
+from flask import Flask, render_template, request, abort, redirect, url_for
 from pathlib import Path
 from datetime import datetime
 import os
@@ -9,12 +9,6 @@ app = Flask(__name__)
 DATA_DIR = Path(os.getenv("SCANNER_DATA_DIR", "/Volumes/1TBT7/dev/options-scanner-plus/feature_store_archives"))
 FILE_PREFIX = "convergence_signals_"
 FILE_SUFFIX = ".csv"
-
-try:
-    from industry import get_industry  # replace with your real function/module
-except Exception:
-    def get_industry(symbol: str) -> str:
-        return "Unknown"
 
 def _date_from_filename(path: Path) -> str | None:
     name = path.stem
@@ -50,6 +44,23 @@ def sec_url(symbol: str, form: str | None = None) -> str:
     if form:
         query += f"&type={form}"
     return f"{base}?{query}"
+
+def _ticker_history(symbol: str) -> pd.DataFrame:
+    symbol = symbol.upper()
+    date_map = _date_map()
+    frames = []
+    for date_str, path in date_map.items():
+        df = pd.read_csv(path)
+        if "symbol" not in df.columns:
+            continue
+        match = df[df["symbol"].astype(str).str.upper() == symbol]
+        if not match.empty:
+            match = match.copy()
+            match["scan_date"] = date_str
+            frames.append(match)
+    if frames:
+        return pd.concat(frames, ignore_index=True)
+    return pd.DataFrame()
 
 app.jinja_env.globals["sec_url"] = sec_url
 
@@ -90,12 +101,16 @@ def rolling_view(days: int):
 
     counts = (
         df.groupby("symbol")
-        .agg(appearances=("symbol", "count"), days=("scan_date", lambda s: sorted(set(s))))
+        .agg(
+            appearances=("symbol", "count"),
+            days=("scan_date", lambda s: sorted(set(s))),
+            industry=("industry", "first")  # Pulls industry straight from your daily CSV rows
+        )
         .reset_index()
         .sort_values(["appearances", "symbol"], ascending=[False, True])
     )
     counts = counts[counts["appearances"] > 1]
-    counts["industry"] = counts["symbol"].apply(get_industry)
+    counts["industry"] = counts["industry"].fillna("Unknown")
 
     industry_breakdown = (
         counts.groupby("industry")["symbol"]
@@ -122,6 +137,32 @@ def weekly():
 @app.route("/monthly")
 def monthly():
     return rolling_view(30)
+
+@app.route("/search")
+def search():
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return redirect(url_for("index"))
+    return redirect(url_for("ticker_view", symbol=symbol))
+
+
+@app.route("/ticker/<symbol>")
+def ticker_view(symbol):
+    symbol = symbol.upper()
+    df = _ticker_history(symbol)
+
+    if df.empty:
+        return render_template(
+            "ticker.html", symbol=symbol, rows=[], columns=[], found=False
+        )
+
+    df = df.sort_values("scan_date", ascending=False)
+    columns = [c for c in df.columns if c != "scan_date"]
+    rows = df.to_dict(orient="records")
+
+    return render_template(
+        "ticker.html", symbol=symbol, rows=rows, columns=columns, found=True
+    )
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
