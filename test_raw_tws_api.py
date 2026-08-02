@@ -1044,9 +1044,9 @@ class Pillar1MarketData:
                     f"with {days_to_exp} days to expiration..."
                 )
                 for strike in strikes_to_pull:
-                    # Skip non-integer strikes for long-dated
-                    if days_to_exp > 90 and (strike % 1 != 0):
-                        continue
+                    # Skip non-integer strikes for long-dated <- testing without this filter
+                    #if days_to_exp > 90 and (strike % 1 != 0):
+                        #continue
                     for right in ['C', 'P']:
                         opt = Contract()
                         opt.symbol                       = contract.symbol
