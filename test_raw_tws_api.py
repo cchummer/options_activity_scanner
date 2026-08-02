@@ -43,6 +43,8 @@ logging.basicConfig(
     stream=sys.stdout,
     format='%(asctime)s [%(levelname)s] (%(filename)s:%(lineno)d) %(message)s'
 )
+# IBKR is very verbose by default, so we silence the ibapi logger to WARNING level to reduce noise.
+logging.getLogger("ibapi").setLevel(logging.WARNING)
 
 # Mandatory SEC EDGAR identification string
 set_identity("SpecialSituationsQuant Engine securedhummer@gmail.com")
@@ -71,6 +73,12 @@ TICK_OPT_CONTRACT_VOLUME = 8   # Day volume for the option contract itself — O
 GEN_TICK_AVG_OPT_VOL     = 105
 TICK_AVG_OPT_VOL         = 87
 
+# ── Option computation tick-type IDs (arrive via tickOptionComputation, NOT tickGeneric) ──
+OPT_COMP_BID   = 10   # BID_OPTION_COMPUTATION
+OPT_COMP_ASK   = 11   # ASK_OPTION_COMPUTATION
+OPT_COMP_LAST  = 12   # LAST_OPTION_COMPUTATION
+OPT_COMP_MODEL = 13   # MODEL_OPTION_COMPUTATION — TWS's canonical displayed IV
+GEN_TICK_OPTION_IV = 106  # generic tick code to request in reqMktData
 
 # ── Informational TWS codes that are not real errors ──────────────────────────
 _TWS_INFO_CODES = {2104, 2106, 2107, 2108, 2119, 2158}
@@ -108,6 +116,8 @@ class TickerSnapshot:
         'callVolume', 'putVolume', 'avOptionVolume',  # STK-level option activity
         'openInterest', 'volume',                       # OPT contract-level
         'pcRatio',  # Put/Call ratio
+        'impliedVol',
+        'delta',
     )
 
     def __init__(self, contract: Contract):
@@ -120,6 +130,8 @@ class TickerSnapshot:
         self.openInterest    = None
         self.volume          = None
         self.pcRatio         = None
+        self.impliedVol      = None
+        self.delta           = None
 
 # ══════════════════════════════════════════════════════════════════════════════
 # IBKRApp  —  thin EWrapper / EClient
@@ -294,6 +306,27 @@ class IBKRApp(EWrapper, EClient):
     def securityDefinitionOptionParameterEnd(self, reqId):
         self._signal(reqId)
 
+    # ── Option computation callback (IV, delta, gamma, etc.) ───────────────────
+
+    def tickOptionComputation(self, reqId, tickType, tickAttrib,
+                              impliedVol, delta, optPrice, pvDividend,
+                              gamma, vega, theta, undPrice):
+        """
+        Fires when generic tick 106 is requested on an OPT contract.
+        impliedVol arrives as -1 or DBL_MAX when TWS can't compute it
+        (e.g. no valid bid/ask to solve against) — filter both sentinels.
+        Stores per computation-source (model/bid/ask/last) so callers can
+        prefer the model IV, matching what TWS displays in the option chain.
+        """
+        slot  = self._get(reqId)
+        ticks = slot.get("ticks")
+        if ticks is None:
+            return
+        if impliedVol is not None and 0 < impliedVol <= 5:
+            ticks.setdefault("iv_by_source", {})[tickType] = impliedVol
+        if delta is not None and abs(delta) <= 1:
+            ticks.setdefault("delta_by_source", {})[tickType] = delta
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Pillar 1 — Market Data  (synchronous TWS raw API)
@@ -317,6 +350,15 @@ class Pillar1MarketData:
     HIST_TIMEOUT     = 60.0   # seconds: 5-year daily bar pulls can be large
     QUALIFY_TIMEOUT  = 15.0   # seconds: per contract-details request
     QUALIFY_DELAY    = 0.05   # seconds: pacing pause between batched qualifications
+
+    OI_ANALYSIS_STRIKE_COUNT = 6 # how many nearest strikes to pull for the OI analysis
+    WING_STRIKE_COUNT = 13   # how many nearest strikes to pull for the delta-band wing search
+    WING_DELTA_LOW    = 0.15
+    WING_DELTA_HIGH   = 0.35
+    TERM_STRUCTURE_ANOMALY_THRESHOLD_PCT = 15.0  # flag expiries priced >15% off their neighbor-interpolated level
+
+    DEAL_PREMIUM_LOW  = 0.20   # 20% above spot
+    DEAL_PREMIUM_HIGH = 0.40   # 40% above spot
 
     def __init__(self, host='127.0.0.1', port=4001, client_id=1): # TWS Port=7496, Paper=7497, Live GW=4001, Paper GW=4002
         self._app      = IBKRApp()
@@ -405,7 +447,8 @@ class Pillar1MarketData:
 
     def _get_historical_bars(self, contract: Contract,
                              duration: str = '5 Y',
-                             bar_size: str = '1 day') -> list:
+                             bar_size: str = '1 day',
+                             what_to_show: str = 'TRADES') -> list:
         """
         Synchronous replacement for ib_async's reqHistoricalDataAsync().
         Returns a list of BarData objects (ibapi.common.BarData).
@@ -414,21 +457,73 @@ class Pillar1MarketData:
         self._app._alloc(rid)
         self._app.reqHistoricalData(
             rid, contract,
-            '',          # endDateTime — '' = now
-            duration,    # e.g. '5 Y', '5 D'
-            bar_size,    # e.g. '1 day'
-            'TRADES',
-            1,           # useRTH
-            1,           # formatDate (1 = string "YYYYMMDD HH:MM:SS")
-            False,       # keepUpToDate
-            []           # chartOptions
+            '',           # endDateTime — '' = now
+            duration,     # e.g. '5 Y', '5 D'
+            bar_size,     # e.g. '1 day'
+            what_to_show, # 'TRADES', 'OPTION_IMPLIED_VOLATILITY', etc.
+            1,            # useRTH
+            1,            # formatDate (1 = string "YYYYMMDD HH:MM:SS")
+            False,        # keepUpToDate
+            []            # chartOptions
         )
         ok = self._app._wait(rid, timeout=self.HIST_TIMEOUT)
         if not ok:
             logging.warning(
-                f"Historical data timed out for {getattr(contract, 'symbol', '?')}"
+                f"Historical data timed out for {getattr(contract, 'symbol', '?')} "
+                f"(whatToShow={what_to_show})"
             )
         return self._app._get(rid).get("rows", [])
+
+    # ── IV Rank / Percentile ─────────────────────────────────────────────────
+
+    def get_iv_rank_percentile(self, contract: Contract) -> dict | None:
+        """
+        Derives 52wk and 13wk IV Rank/Percentile for `contract`'s underlying,
+        since TWS API exposes no native IV Rank field. Pulls one year of daily
+        'OPTION_IMPLIED_VOLATILITY' bars on the STOCK contract and slices the
+        tail for the 13wk window rather than firing a second request.
+
+        Returns None if no IV bars come back (e.g. missing options data
+        subscription for this underlying).
+        """
+        logging.info(
+            f"Fetching 1-year daily IV history for underlying {getattr(contract, 'symbol', '?')}..."
+        )
+        bars = self._get_historical_bars(
+            contract,
+            duration='1 Y',
+            bar_size='1 day',
+            what_to_show='OPTION_IMPLIED_VOLATILITY',
+        )
+        time.sleep(self.QUALIFY_DELAY)
+        if not bars:
+            logging.warning(
+                f"No IV history for underlying {getattr(contract, 'symbol', '?')}; "
+                "check options market data subscription."
+            )
+            return None
+
+        bars = sorted(bars, key=lambda b: b.date)
+        closes = [b.close for b in bars]
+
+        def _rank_pct(window: list) -> tuple:
+            current = window[-1]
+            hi, lo = max(window), min(window)
+            rank = ((current - lo) / (hi - lo) * 100) if hi != lo else float('nan')
+            pct  = sum(1 for v in window if v < current) / len(window) * 100
+            return current, rank, pct
+
+        cur_52, rank_52, pct_52 = _rank_pct(closes)
+        cur_13, rank_13, pct_13 = _rank_pct(closes[-65:])  # ~13wk trading days
+
+        return {
+            #"symbol":        getattr(contract, 'symbol', '?'),
+            "current_iv":    cur_52,
+            "iv_rank_52wk":  rank_52,
+            "iv_pct_52wk":   pct_52,
+            "iv_rank_13wk":  rank_13,
+            "iv_pct_13wk":   pct_13,
+        }
 
     # ── Scanner ───────────────────────────────────────────────────────────────
 
@@ -730,9 +825,10 @@ class Pillar1MarketData:
         Synchronous replacement for async safe_fetch_tickers().
 
         Streams OPT market data in chunks using:
-          genericTickList='100,101'
+          genericTickList:
             100 → option volume  (tick type 8 for the specific OPT contract)
             101 → open interest  (tick type 22 for the specific OPT contract)
+            106 -> implied volatility
 
         Uses streaming (snapshot=False) to allow OI ticks — which TWS publishes
         once per day from the OCC — to trickle in over OPT_STREAM_WAIT seconds.
@@ -763,7 +859,7 @@ class Pillar1MarketData:
                     ticker = TickerSnapshot(contract)
                     self._app._alloc(rid, ticks={})
                     chunk_rids[rid] = ticker
-                    self._app.reqMktData(rid, contract, '101', False, False, [])
+                    self._app.reqMktData(rid, contract, '101,106', False, False, [])
 
                 time.sleep(self.OPT_STREAM_WAIT)
 
@@ -777,6 +873,24 @@ class Pillar1MarketData:
                         ticker.openInterest = _safe_int(ticks.get(TICK_CALL_OI))
                     elif ticker.contract.right == 'P':
                         ticker.openInterest = _safe_int(ticks.get(TICK_PUT_OI))
+
+                    # Prefer MODEL IV (what TWS displays); fall back to bid/ask/last
+                    iv_by_source = ticks.get("iv_by_source", {})
+                    ticker.impliedVol = (
+                        iv_by_source.get(OPT_COMP_MODEL)
+                        or iv_by_source.get(OPT_COMP_LAST)
+                        or iv_by_source.get(OPT_COMP_ASK)
+                        or iv_by_source.get(OPT_COMP_BID)
+                    )
+
+                    delta_by_source = ticks.get("delta_by_source", {})
+                    ticker.delta = (
+                        delta_by_source.get(OPT_COMP_MODEL)
+                        or delta_by_source.get(OPT_COMP_LAST)
+                        or delta_by_source.get(OPT_COMP_ASK)
+                        or delta_by_source.get(OPT_COMP_BID)
+                    )
+
                     chunk_tickers.append(ticker)
 
                 # --- Pass 2: Type 2 frozen streaming → volume (tick 8, weekend-safe) ---
@@ -822,17 +936,17 @@ class Pillar1MarketData:
         Steps:
           1. reqSecDefOptParams   → get chain expirations + strikes
           2. Filter to target expiry window; pick 5 nearest strikes
-          3. Build Option Contracts for up to 5 expiries × 5 strikes × C/P
+          3. Build Option Contracts for up to X expiries × X strikes × C/P
           4. _qualify_many()      → resolve conIds (replaces qualifyContractsAsync)
           5. safe_fetch_tickers() → stream OI + volume for each option
-          6. Aggregate call/put volume and OI skew metrics
+          6. Aggregate call/put OI, volume and IV skew metrics
         """
         logging.info(
-            f"Extracting derivative positioning footprints for {contract.symbol}..."
+            f"Extracting derivative positioning footprints for {contract.symbol}... Current underlying price: {underlying_price:.2f}"
         )
         _err = {
-            "leap_volume_skews": 0, "dominant_expiry_by_vol": "None",
-            "dominant_expiry_by_oi": "None", "atm_oi_depth": 0, "leap_oi_skews": 0,
+            "atm_volume_skews": 0, "dominant_expiry_by_vol": "None",
+            "dominant_expiry_by_oi": "None", "atm_oi_depth": 0, "atm_oi_skews": 0,
         }
         try:
             if not underlying_price or underlying_price == 0:
@@ -882,17 +996,45 @@ class Pillar1MarketData:
             if not target_expiries:
                 return _err
 
-            # ── 3. Nearest 5 strikes ──────────────────────────────────────────
+            # ── 3. Select the nearest strikes for OI analysis and wing IV analysis ──────
             strikes        = sorted(chain["strikes"])
-            nearest_strikes = sorted(
-                strikes, key=lambda s: abs(s - underlying_price)
-            )[:5]
-            if not nearest_strikes:
-                nearest_strikes = [min(strikes, key=lambda s: abs(s - underlying_price))]
+            strikes_by_dist = sorted(strikes, key=lambda s: abs(s - underlying_price))
 
-            sampled_expiries = target_expiries[:5]
+            oi_strikes = strikes_by_dist[:self.OI_ANALYSIS_STRIKE_COUNT]
+            if not oi_strikes:
+                oi_strikes = [min(strikes, key=lambda s: abs(s - underlying_price))]
+
+            wing_strikes = strikes_by_dist[:self.WING_STRIKE_COUNT]
+            if not wing_strikes:
+                wing_strikes = oi_strikes
+
+            logging.info(f"Selected {len(oi_strikes)} nearest strikes for OI analysis: {oi_strikes}")
+            logging.info(f"Selected {len(wing_strikes)} nearest strikes for wing IV analysis: {wing_strikes}")
+
+            # Fast membership check for the OI aggregation gate later
+            oi_strike_set = {round(s, 4) for s in oi_strikes}
+            wing_strike_set = {round(s, 4) for s in wing_strikes}  # Gate IV skew calc to wing only
+
+            deal_low  = underlying_price * (1 + self.DEAL_PREMIUM_LOW)
+            deal_high = underlying_price * (1 + self.DEAL_PREMIUM_HIGH)
+            deal_strikes = [s for s in strikes if deal_low <= s <= deal_high]
+            deal_strike_set = {round(s, 4) for s in deal_strikes}
+
+            logging.info(
+                f"Deal-premium band for {contract.symbol}: "
+                f"${deal_low:.2f}-${deal_high:.2f} → {len(deal_strikes)} strikes: {deal_strikes}"
+            )
+
+            # Union with wing_strikes drives the contract grid — oi_strikes is
+            # unaffected and still only used for the OI-leg gate
+            strikes_to_pull = sorted(set(wing_strikes) | set(deal_strikes))
+
+            # Grab first 8 expiries that fit our time constraints above
+            sampled_expiries = target_expiries[:8]
 
             # ── 4. Build option contracts ─────────────────────────────────────
+            # (oi_strikes is a subset of wing_strikes which is now a subset of strikes_to_pull, so this single grid covers both legs —
+            #  no duplicate requests, no separate qualify/stream pass needed)
             option_contracts = []
             for expiry in sampled_expiries:
                 exp_date    = datetime.strptime(expiry, '%Y%m%d')
@@ -901,8 +1043,8 @@ class Pillar1MarketData:
                     f"Processing expiry {expiry} for {contract.symbol} "
                     f"with {days_to_exp} days to expiration..."
                 )
-                for strike in nearest_strikes:
-                    # Mirror original: skip non-integer strikes for long-dated
+                for strike in strikes_to_pull:
+                    # Skip non-integer strikes for long-dated
                     if days_to_exp > 90 and (strike % 1 != 0):
                         continue
                     for right in ['C', 'P']:
@@ -933,9 +1075,9 @@ class Pillar1MarketData:
                 logging.warning(f"No valid qualified option contracts for {contract.symbol}")
                 return _err
 
-            # ── 6. Fetch OI + volume ──────────────────────────────────────────
+            # ── 6. Fetch contract data  ──────────────────────────────────────────
             logging.info(
-                f"Requesting snapshots safely for {len(qualified)} ATM derivative contracts..."
+                f"Requesting market data for {len(qualified)} option contracts for {contract.symbol}..."
             )
             raw_opt_tickers = self.safe_fetch_tickers(qualified, chunk_size=40)
             opt_tickers = [
@@ -950,43 +1092,233 @@ class Pillar1MarketData:
             total_atm_oi        = 0
             dominant_expiry_oi  = "None"
             dominant_expiry_vol = "None"
+            deal_band_call_vol = deal_band_call_oi = deal_band_max_vol = 0
+            deal_band_dominant_expiry = "None"
+            deal_band_dominant_strike = 0.0
 
-            logging.info(f"Analysing {len(opt_tickers)} qualified option tickers...")
+            # Per-expiry OTM call/put IV buckets — NOT gated to oi_strikes, uses the full wing pool
+            iv_by_expiry = {}  # expiry -> {"call_ivs": [...], "put_ivs": [...]}
+            call_vol_by_line = {}        # (expiry, strike) -> volume, ACROSS THE WHOLE GRID
+            total_call_vol_all = 0
+
+            logging.info(f"Analysing {len(opt_tickers)} qualified option tickers returned...")
             for ot in opt_tickers:
                 oi  = _safe_int(getattr(ot, 'openInterest', 0))
                 vol = _safe_int(getattr(ot, 'volume',       0))
-                total_atm_oi += oi
+                strike_key = round(ot.contract.strike, 4)
+                is_oi_strike = strike_key in oi_strike_set
+                
                 logging.info(
                     f"Option {ot.contract.symbol} "
                     f"{ot.contract.lastTradeDateOrContractMonth} "
-                    f"{ot.contract.strike} {ot.contract.right}: OI={oi}, Vol={vol}"
+                    f"{ot.contract.strike} {ot.contract.right}: "
+                    f"OI={oi}, Vol={vol}, IV={ot.impliedVol}, delta={ot.delta}"
+                    f"{'  [OI leg]' if is_oi_strike else '  [wing/deal only]'}"
                 )
 
-                if oi > max_oi:
-                    max_oi             = oi
-                    dominant_expiry_oi = ot.contract.lastTradeDateOrContractMonth
-                if vol > max_vol:
-                    max_vol             = vol
-                    dominant_expiry_vol = ot.contract.lastTradeDateOrContractMonth
+                # ── ATM OI/volume leg: only OI_ANALYSIS_STRIKE_COUNT strikes ──
+                if is_oi_strike:
+                    total_atm_oi += oi
+                    if oi > max_oi:
+                        max_oi             = oi
+                        dominant_expiry_oi = ot.contract.lastTradeDateOrContractMonth
+                    if vol > max_vol:
+                        max_vol             = vol
+                        dominant_expiry_vol = ot.contract.lastTradeDateOrContractMonth
 
+                    if ot.contract.right == 'C':
+                        total_call_vol += vol
+                        total_call_oi  += oi
+                    else:
+                        total_put_vol  += vol
+                        total_put_oi   += oi
+
+                # ── Call concentration tracking: EVERY call contract in the pulled grid ──
                 if ot.contract.right == 'C':
-                    total_call_vol += vol
-                    total_call_oi  += oi
-                else:
-                    total_put_vol  += vol
-                    total_put_oi   += oi
+                    line_key = (ot.contract.lastTradeDateOrContractMonth, ot.contract.strike)
+                    call_vol_by_line[line_key] = call_vol_by_line.get(line_key, 0) + vol
+                    total_call_vol_all += vol
+                    logging.info(
+                        f"Accumulated call volume for line {line_key}: "
+                        f"{call_vol_by_line[line_key]} (total across grid: {total_call_vol_all})"
+                    )
+
+                # M&A Deal band (further OTM strikes) analysis 
+                is_deal_strike = strike_key in deal_strike_set
+                if is_deal_strike and ot.contract.right == 'C':
+                    logging.info(
+                        f"Deal-band call strike {strike_key} detected within "
+                        f"premium band ${deal_low:.2f}-${deal_high:.2f}: "
+                        f"OI={oi}, Vol={vol}"
+                    )
+                    deal_band_call_vol += vol
+                    deal_band_call_oi  += oi
+                    if vol > deal_band_max_vol:
+                        deal_band_max_vol         = vol
+                        deal_band_dominant_expiry = ot.contract.lastTradeDateOrContractMonth
+                        deal_band_dominant_strike = ot.contract.strike
+
+                # ── IV skew leg: gated to wing strikes only, so deal-band strikes ──
+                # ── (which are much further OTM) don't distort the near-wing skew ──
+                if ot.impliedVol is not None and ot.delta is not None and strike_key in wing_strike_set:
+                    exp = ot.contract.lastTradeDateOrContractMonth
+                    bucket = iv_by_expiry.setdefault(exp, {"call_ivs": [], "put_ivs": []})
+                    d = ot.delta
+                    if ot.contract.right == 'C' and self.WING_DELTA_LOW <= d <= self.WING_DELTA_HIGH:
+                        logging.info(
+                            f"OTM call strike {strike_key} with delta {d:.3f} "
+                            f"falls within wing delta range "
+                            f"[{self.WING_DELTA_LOW}, {self.WING_DELTA_HIGH}]; "
+                            f"adding IV {ot.impliedVol:.3f} to expiry {exp} bucket."
+                        )
+                        bucket["call_ivs"].append(ot.impliedVol)
+                    elif ot.contract.right == 'P' and -self.WING_DELTA_HIGH <= d <= -self.WING_DELTA_LOW:
+                        logging.info(
+                            f"OTM put strike {strike_key} with delta {d:.3f} "
+                            f"falls within wing delta range "
+                            f"[-{self.WING_DELTA_HIGH}, -{self.WING_DELTA_LOW}]; adding IV {ot.impliedVol:.3f} to expiry {exp} bucket."
+                        )
+                        bucket["put_ivs"].append(ot.impliedVol)
+
+            # ── 8. OTM Call/Put IV skew per expiry — find the strongest call skew ──
+            logging.info(f"Analyzing OTM call/put IV skew across {len(iv_by_expiry)} expiries for symbol {contract.symbol}...")
+            best_expiry     = "None"
+            best_skew_pct   = 0.0
+            best_call_iv    = 0.0
+            best_put_iv     = 0.0
+            skew_samples    = []  # for an across-expiries average
+
+            for exp, bucket in iv_by_expiry.items():
+                logging.info(f"Expiry {exp}: {len(bucket['call_ivs'])} OTM call IVs, {len(bucket['put_ivs'])} OTM put IVs")
+
+                if not bucket["call_ivs"] or not bucket["put_ivs"]:
+                    logging.info(f"Skipping expiry {exp} due to insufficient IV data for skew calculation.")
+                    continue
+                call_iv = sum(bucket["call_ivs"]) / len(bucket["call_ivs"])
+                put_iv  = sum(bucket["put_ivs"])  / len(bucket["put_ivs"])
+                if put_iv <= 0:
+                    continue
+                skew_pct = (call_iv / put_iv - 1.0) * 100.0
+                skew_samples.append(skew_pct)
+
+                logging.info(
+                    f"{contract.symbol} {exp}: OTM Call IV={call_iv:.3f} "
+                    f"(n={len(bucket['call_ivs'])}) vs OTM Put IV={put_iv:.3f} "
+                    f"(n={len(bucket['put_ivs'])})  skew={skew_pct:+.1f}%"
+                )
+
+                if skew_pct > best_skew_pct:
+                    logging.info(
+                        f"New best skew identified for {contract.symbol}: {skew_pct:+.1f}% at expiry {exp} (Call IV={call_iv:.3f}, Put IV={put_iv:.3f})"
+                    )
+                    best_skew_pct = skew_pct
+                    best_expiry   = exp
+                    best_call_iv  = call_iv
+                    best_put_iv   = put_iv
+
+            avg_skew_pct = sum(skew_samples) / len(skew_samples) if skew_samples else 0.0
+
+            # ── 8b. Call volume concentration — is one line dominating the flow? ──
+            concentration_pct    = 0.0
+            concentration_expiry = "None"
+            concentration_strike = 0.0
+
+            if call_vol_by_line and total_call_vol_all > 0:
+                (concentration_expiry, concentration_strike), max_line_vol = max(
+                    call_vol_by_line.items(), key=lambda kv: kv[1]
+                )
+                concentration_pct = max_line_vol / total_call_vol_all * 100.0
+                logging.info(
+                    f"{contract.symbol}: peak call volume concentration "
+                    f"{concentration_pct:.1f}% at {concentration_expiry} ${concentration_strike}"
+                )
+
+            # ── 9. Term structure anomaly — expiries priced off the local curve ────
+            expiry_days = sorted(
+                ((exp, (datetime.strptime(exp, '%Y%m%d') - now).days)
+                 for exp in iv_by_expiry),
+                key=lambda x: x[1]
+            )
+
+            expiry_rep_iv = {}
+            for exp, bucket in iv_by_expiry.items():
+                all_ivs = bucket["call_ivs"] + bucket["put_ivs"]
+                if all_ivs:
+                    expiry_rep_iv[exp] = sum(all_ivs) / len(all_ivs)
+
+            worst_anomaly_expiry = "None"
+            worst_anomaly_pct    = 0.0
+
+            # Interior points only — first/last expiry in the sampled window has no
+            # neighbor on one side to interpolate against, so we skip those rather
+            # than guess with a one-sided extrapolation.
+            for i in range(1, len(expiry_days) - 1):
+                exp, _      = expiry_days[i]
+                prev_exp, _ = expiry_days[i - 1]
+                next_exp, _ = expiry_days[i + 1]
+                logging.info(
+                    f"Checking term structure anomaly for {contract.symbol} expiry {exp} "  
+                    f"with neighbors {prev_exp} and {next_exp}."
+                )
+
+                if exp not in expiry_rep_iv or prev_exp not in expiry_rep_iv or next_exp not in expiry_rep_iv:
+                    logging.info(
+                        f"Skipping expiry {exp} for term structure anomaly check due to missing representative IVs."
+                    )
+                    continue
+
+                expected_iv = (expiry_rep_iv[prev_exp] + expiry_rep_iv[next_exp]) / 2.0
+                if expected_iv <= 0:
+                    logging.info(
+                        f"Skipping expiry {exp} for term structure anomaly check due to non-positive expected IV."
+                    )
+                    continue
+                anomaly_pct = (expiry_rep_iv[exp] - expected_iv) / expected_iv * 100.0
+
+                logging.info(
+                    f"{contract.symbol} {exp}: rep IV={expiry_rep_iv[exp]:.3f} vs "
+                    f"neighbor-expected={expected_iv:.3f}  anomaly={anomaly_pct:+.1f}%"
+                )
+                if abs(anomaly_pct) > abs(worst_anomaly_pct):
+                    logging.info(
+                        f"New worst term structure anomaly for {contract.symbol}: "
+                        f"{anomaly_pct:+.1f}% at expiry {exp} (rep IV={expiry_rep_iv[exp]:.3f}, expected={expected_iv:.3f})"
+                    )
+                    worst_anomaly_pct    = anomaly_pct
+                    worst_anomaly_expiry = exp
+
+            term_structure_flag = int(worst_anomaly_pct >= self.TERM_STRUCTURE_ANOMALY_THRESHOLD_PCT)
 
             return {
-                "leap_volume_skews":    round(float(total_call_vol) / float(total_put_vol or 1), 2),
-                "dominant_expiry_by_vol": dominant_expiry_vol,
-                "dominant_expiry_by_oi":  dominant_expiry_oi,
+                "atm_volume_skews":    round(float(total_call_vol) / float(total_put_vol or 1), 2),
+                "atm_dominant_expiry_by_vol": dominant_expiry_vol,
+                "atm_dominant_expiry_by_oi":  dominant_expiry_oi,
                 "atm_oi_depth":          total_atm_oi,
-                "leap_oi_skews":         round(float(total_call_oi) / float(total_put_oi or 1), 2),
+                "atm_oi_skews":         round(float(total_call_oi) / float(total_put_oi or 1), 2),
+                "otm_call_iv_max_skew_expiry": best_expiry,
+                "otm_call_iv":                 round(best_call_iv, 4),
+                "otm_put_iv":                  round(best_put_iv, 4),
+                "call_put_iv_skew_pct":        round(best_skew_pct, 2),
+                "call_put_iv_skew_pct_avg":    round(avg_skew_pct, 2),
+                "call_skew_flag":              int(best_skew_pct >= 15.0),  # tune threshold
+                "iv_skew_expiries_matched":    len(skew_samples),
+                "call_vol_concentration_pct":    round(concentration_pct, 2),
+                "concentration_expiry":          concentration_expiry,
+                "concentration_strike":          concentration_strike,
+                "term_structure_anomaly_expiry": worst_anomaly_expiry,
+                "term_structure_anomaly_pct":    round(worst_anomaly_pct, 2),
+                "term_structure_flag":           term_structure_flag,
+                "deal_band_call_vol":          deal_band_call_vol,
+                "deal_band_call_oi":           deal_band_call_oi,
+                "deal_band_vol_oi_ratio":      round(deal_band_call_vol / deal_band_call_oi, 2) if deal_band_call_oi else 0.0,
+                "deal_band_concentration_pct": round(deal_band_call_vol / total_call_vol_all * 100.0, 2) if total_call_vol_all else 0.0,
+                "deal_band_dominant_expiry":   deal_band_dominant_expiry,
+                "deal_band_dominant_strike":   deal_band_dominant_strike,
             }
 
         except Exception as err:
             logging.error(
-                f"Derivative structural block parsing failed for {contract.symbol}: {err}"
+                f"Option chain analysis failed for {contract.symbol}: {err}"
             )
             return _err
 
@@ -996,7 +1328,61 @@ class Pillar1MarketData:
 # ══════════════════════════════════════════════════════════════════════════════
 class Pillar2SECData:
     """Handles time-decayed Form 4 extraction and XBRL capital-structure metrics via EDGAR."""
+    
+    @staticmethod
+    def extract_sic_industry(symbol):
+        """
+        Pull SIC metadata using filing_parser.py pipeline.
+        Returns:
+            {
+                "whole_sic_code": str|None,
+                "sic_desc": str|None,
+                "sic_major_group": str|None,
+            }
+        """
+        try:
+            logging.info(f"Extracting SIC industry metadata for {symbol}...")
 
+            # Get most recent filing from the company
+            # Exclude beneficial ownership filings, they are returned by get_filings() but are filed by the owner, not the company itself.  We want the company's own filings for SIC.
+            excluded_forms = { '13F-HR', '13F-NT', 'SC 13D', 'SC 13G', 'SC 13G/A', 'SC 13D/A' } # Exclude beneficial ownership filings, they are returned by 
+            company = Company(symbol)
+            all_filings = company.get_filings()
+
+            filtered_filings = [f for f in all_filings if f.form not in excluded_forms]
+    
+            most_recent_filing = filtered_filings[0] if filtered_filings else None
+            if not most_recent_filing:
+                raise ValueError("No valid filings found for the given symbol.")
+
+            filing_fulltext = most_recent_filing.full_text_submission()
+            filing_type = most_recent_filing.form
+            logging.info(f"Most recent filing for {symbol}: {filing_type}, going to scrape for SIC...")
+
+            # SEC header (which contains SIC) parsing is triggered via init of MasterParserClass with filing text and type
+            parser = MasterParserClass(filing_fulltext, filing_type)
+
+            sic_code = parser.filing_info.at[0, "whole_sic_code"]
+            sic_desc = parser.filing_info.at[0, "sic_desc"]
+
+            # preserve leading zero if SIC arrives numeric
+            sic_code = str(sic_code).zfill(4) if sic_code not in (None, "", "nan") else None
+            major_group = sic_code[:2] if sic_code else None
+            logging.info(f"Determined SIC for {symbol}: {sic_code} ({sic_desc}), major group: {major_group}")
+
+            return {
+                "whole_sic_code": sic_code,
+                "sic_desc": sic_desc,
+                "sic_major_group": major_group,
+            }
+        except Exception as e:
+            logging.info(f"SIC extraction failed for {symbol}: {e}")
+            return {
+                "whole_sic_code": None,
+                "sic_desc": None,
+                "sic_major_group": None,
+            }
+    
     @staticmethod
     def compute_insider_conviction(symbol, lookback_days=90):
         """Calculates time-decayed net institutional buying IN DOLLARS (Notional USD)."""
@@ -1302,19 +1688,19 @@ class ConvergencePipeline:
         symbol          = feature_row.get("symbol", "N/A")
         dist_200dma     = feature_row.get("dist_to_200dma", 0)
         ic_score        = feature_row.get("insider_conviction_score", 0)
-        oi_skew          = feature_row.get("leap_oi_skews", 1.0)
+        oi_skew          = feature_row.get("atm_oi_skews", 1.0)
         regime          = feature_row.get("market_regime", "")
         contraction_mean = float(feature_row.get("contraction_mean", float('nan')))
 
         if ic_score < 0:
             logging.info(f"Filtering out {symbol}: negative insider conviction ({ic_score}).")
             return False
-        
+
+        '''
         if oi_skew <= 1.0:
             logging.info(f"Filtering out {symbol}: leap_oi_skews ({oi_skew}) out of bounds.")
             return False
 
-        '''
         if regime != "Accumulation Base":
             logging.info(f"Filtering out {symbol}: regime '{regime}' ≠ 'Accumulation Base'.")
             return False
@@ -1371,14 +1757,20 @@ class ConvergencePipeline:
                     t.contract, last_price
                 )
 
-                insider_score    = self.sec_broker.compute_insider_conviction(sym)
-                debt_delta       = self.sec_broker.extract_debt_reduction_metrics(sym)
+                stock_iv          = self.ib_broker.get_iv_rank_percentile(t.contract)
+                insider_score     = self.sec_broker.compute_insider_conviction(sym)
+                debt_delta        = self.sec_broker.extract_debt_reduction_metrics(sym)
+                sic_industry      = self.sec_broker.extract_sic_industry(sym)
                 catalyst_features = self.text_broker.process_corporate_catalysts(sym)
 
                 feature_row = {
                     "timestamp":              datetime.now().strftime("%Y-%m-%d"),
                     "symbol":                 sym,
+                    "sic_code":               sic_industry.get("whole_sic_code"),
+                    "industry":               sic_industry.get("sic_desc"),
+                    "sic_major_group":        sic_industry.get("sic_major_group"),
                     "last_price":             last_price,
+                    **stock_iv,
                     "put_call_ratio":         float(t.pcRatio) if t.pcRatio else 0.00,
                     "call_volume":            int(t.callVolume)      if t.callVolume      else 0,
                     "put_volume":             int(t.putVolume)       if t.putVolume       else 0,
@@ -1462,14 +1854,20 @@ class ConvergencePipeline:
                 positioning_footprint = self.ib_broker.analyze_positioning_footprint(
                     t.contract, fallback_price
                 )
+                stock_iv          = self.ib_broker.get_iv_rank_percentile(t.contract)
                 insider_score     = self.sec_broker.compute_insider_conviction(sym)
                 debt_delta        = self.sec_broker.extract_debt_reduction_metrics(sym)
+                sic_industry      = self.sec_broker.extract_sic_industry(sym)
                 catalyst_features = self.text_broker.process_corporate_catalysts(sym)
 
                 feature_row = {
                     "timestamp":              datetime.now().strftime("%Y-%m-%d"),
                     "symbol":                 sym,
+                    "sic_code":               sic_industry.get("whole_sic_code"),
+                    "industry":               sic_industry.get("sic_desc"),
+                    "sic_major_group":        sic_industry.get("sic_major_group"),
                     "last_price":             fallback_price,
+                    **stock_iv,
                     "opt_vol_expansion_ratio": 1.0,
                     "market_regime":          str(regime_metrics["regime"]),
                     "is_coiling":             regime_metrics["coiling"],
@@ -1503,7 +1901,7 @@ class ConvergencePipeline:
             return
 
         df = df.sort_values(
-            by=["is_coiling", "leap_volume_skews", "catalyst_flag", "insider_conviction_score"],
+            by=["is_coiling", "atm_volume_skews", "catalyst_flag", "insider_conviction_score"],
             ascending=[False, False, False, False],
         )
 
