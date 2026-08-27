@@ -49,7 +49,7 @@ logging.basicConfig(
 logging.getLogger("ibapi").setLevel(logging.WARNING)
 
 # Mandatory SEC EDGAR identification string
-set_identity("SpecialSituationsQuant Engine securedhummer@gmail.com")
+set_identity("SpecialSituationsQuant Engine securedhummer@gmail.com") # For the love of God, please use your own email address here
 #httpclient.update_rate_limiter(requests_per_second=5) # 5 requests per second, to be safe
 
 
@@ -63,8 +63,8 @@ TICK_LAST            = 4    # Last trade price — STK
 TICK_CLOSE           = 9    # Prior close price — STK
 
 # Sizes / counts (arrive via tickSize callback)
-#TICK_VOLUME          = 8    # Day volume — OPT specific contract
-#TICK_OPEN_INTEREST   = 22   # Open interest — OPT specific contract (needs generic "101")
+#TICK_VOLUME          = 8    # Day volume — OPT specific contract 
+#TICK_OPEN_INTEREST   = 22   # Open interest — OPT specific contract (needs generic "101") # Deprecated, it seems to be replaced by TICK_CALL_OI and TICK_PUT_OI
 TICK_CALL_OI         = 27
 TICK_PUT_OI          = 28
 TICK_CALL_VOL_UND        = 29   # Day call volume for underlying — STK (needs generic "100")
@@ -519,16 +519,22 @@ class Pillar1MarketData:
             retries=3
         )
         rows = self._app._get(rid).get("rows", [])
+        return rows[0].contract if (ok and rows) else None
 
-    def _qualify_many(self, contracts: list) -> list:
+    def _qualify_many(self, contracts: list) -> tuple[list, dict]:
         """
         Safer sequential qualification with limiter + retry.
+        Returns:
+          qualified_contracts: list[Contract|None]
+          stats: {"attempted": int, "qualified": int, "code200": int}
         """
         if not contracts:
-            return []
+            return [], {"attempted": 0, "qualified": 0, "code200": 0}
 
         results = []
+        stats = {"attempted": 0, "qualified": 0, "code200": 0}
         for c in contracts:
+            stats["attempted"] += 1
             rid = self._app._next_req_id()
             self._app._alloc(rid)
 
@@ -541,11 +547,18 @@ class Pillar1MarketData:
             )
 
             rows = self._app._get(rid).get("rows", [])
-            results.append(rows[0].contract if (ok and rows) else None)
+            q = rows[0].contract if (ok and rows) else None
+            if q and getattr(q, "conId", 0):
+                stats["qualified"] += 1
+            else:
+                err = self._app.pop_req_error(rid)
+                if err and err[0] == 200:
+                    stats["code200"] += 1
+            results.append(q)
             time.sleep(self.QUALIFY_DELAY)
 
-        return results
-
+        return results, stats
+    
     # ── Internal: historical bars ─────────────────────────────────────────────
 
     def _get_historical_bars(self, contract: Contract,
@@ -699,7 +712,7 @@ class Pillar1MarketData:
 
         return valid_contracts
 
-    # ── STK market data snapshot (volume filter) ──────────────────────────────
+    # ── STK market data snapshot (option volume filter) ──────────────────────────────
 
     def fetch_ticker_snapshots(self, contracts: list) -> list:
         logging.info(f"Requesting market snapshots for {len(contracts)} assets...")
@@ -1078,11 +1091,12 @@ class Pillar1MarketData:
             if not chain_rows:
                 return _err
 
-            # Prefer SMART exchange routing
             chain = next(
-                (r for r in chain_rows if r["exchange"] == "SMART"),
-                chain_rows[0]
-            )
+                    (r for r in chain_rows if r["exchange"] == "SMART"),
+                    chain_rows[0]
+                )
+            chain_trading_class = chain.get("tradingClass")
+            chain_multiplier = str(chain.get("multiplier") or "100")
 
             # ── 2. Filter expirations to target window ────────────────────────
             now      = datetime.now()
@@ -1160,11 +1174,14 @@ class Pillar1MarketData:
                         opt.lastTradeDateOrContractMonth = expiry
                         opt.strike                       = strike
                         opt.right                        = right
-                        opt.multiplier                   = '100'
+                        opt.multiplier                   = chain_multiplier
+                        if chain_trading_class:
+                            opt.tradingClass             = chain_trading_class
                         option_contracts.append(opt)
                         logging.info(
                             f"Prepared option contract: {opt.symbol} "
                             f"{opt.lastTradeDateOrContractMonth} {opt.strike} {opt.right}"
+                            f" (class={getattr(opt, 'tradingClass', None)}, mult={opt.multiplier})"
                         )
 
             # ── 5. Qualify (replaces qualifyContractsAsync) ───────────────────
@@ -1172,8 +1189,21 @@ class Pillar1MarketData:
                 f"Qualifying {len(option_contracts)} option contracts for {contract.symbol}..."
             )
             # _qualify_many fires all reqContractDetails concurrently then waits
-            qualified = self._qualify_many(option_contracts)
+            qualified, qstats = self._qualify_many(option_contracts)
             qualified = [q for q in qualified if q and getattr(q, 'conId', 0)]
+
+            # Stats summary for logging
+            attempted = qstats.get("attempted", len(option_contracts))
+            qualified_n = qstats.get("qualified", len(qualified))
+            code200_n = qstats.get("code200", 0)
+            failed_n = max(0, attempted - qualified_n)
+            qual_rate = (qualified_n / attempted * 100.0) if attempted else 0.0
+
+            logging.info(
+                f"{contract.symbol} option qualification summary: "
+                f"attempted={attempted}, qualified={qualified_n}, failed={failed_n}, "
+                f"code200={code200_n}, qual_rate={qual_rate:.1f}%"
+            )
 
             if not qualified:
                 logging.warning(f"No valid qualified option contracts for {contract.symbol}")
@@ -1450,7 +1480,7 @@ class Pillar2SECData:
             whole_sic_code = company.sic
             major_group = whole_sic_code[:2] if whole_sic_code else None
             logging.info(f"Determined SIC for {symbol}: {whole_sic_code} ({sic_desc}), major group: {major_group}")
-            input()
+            
             return {
                 "whole_sic_code": whole_sic_code,
                 "sic_desc": sic_desc,
