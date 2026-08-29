@@ -49,7 +49,7 @@ logging.basicConfig(
 logging.getLogger("ibapi").setLevel(logging.WARNING)
 
 # Mandatory SEC EDGAR identification string
-set_identity("SpecialSituationsQuant Engine securedhummer@gmail.com") # For the love of God, please use your own email address here
+set_identity("") # Email + name etc
 #httpclient.update_rate_limiter(requests_per_second=5) # 5 requests per second, to be safe
 
 
