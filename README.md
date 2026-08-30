@@ -188,8 +188,3 @@ These CSVs drive the Flask UI and are suitable for later ML/backtesting experime
 - Do not commit API keys, credentials, or personal SEC identity strings to the repository. Use environment variables or local configuration files excluded from version control.
 
 ---
-
-If you’d like, I can:
-- produce a concise `requirements.txt` matching imports used in the code,
-- create a small `CONFIG.md` that lists the minimal edits required to run the scanner (SEC identity, IBKR host/port, `SCANNER_DATA_DIR`), or
-- commit this README as `README.md` in the repository for you. Which would you prefer?
