@@ -2,7 +2,7 @@ TARGET_FILING_TYPES = ['10-q', '10-k', '8-k', 's-1', 's-3', 'def 14a', 'sec staf
 
 SEC_RATE_LIMIT = 10 # Req/s
 SEC_REQ_HEADERS = { 
-    "User-Agent": "Scholarly Research Project securedhummer@gmail.com",
+    "User-Agent": "",
     "Accept-Encoding": "gzip, deflate", 
     "Host": "www.sec.gov"
     }
