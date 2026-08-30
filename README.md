@@ -181,10 +181,3 @@ These CSVs drive the Flask UI and are suitable for later ML/backtesting experime
 - Add `requirements.txt` / `pyproject.toml`, CI checks, and a CONTRIBUTING guide.
 
 ---
-
-## Security & license
-
-- No LICENSE file present. Add a license (MIT / Apache-2.0 / etc.) if you intend to share or accept contributions.
-- Do not commit API keys, credentials, or personal SEC identity strings to the repository. Use environment variables or local configuration files excluded from version control.
-
----
