@@ -1,4 +1,7 @@
-from flask import Blueprint,render_template, request, abort, redirect, url_for
+from flask import Blueprint, render_template, request, abort, redirect, url_for, jsonify
+from db import SessionLocal
+from models import Signal, OptionTick
+from sqlalchemy import func
 from pathlib import Path
 from datetime import datetime
 import os
@@ -73,6 +76,7 @@ def _load_day(date_str: str) -> pd.DataFrame:
         df["timestamp"] = date_str
     return df
 
+@bp.add_app_template_global
 def sec_url(symbol: str, form: str | None = None) -> str:
     base = "https://www.sec.gov/cgi-bin/browse-edgar"
     query = f"action=getcompany&CIK={symbol}&owner=include&count=40"
@@ -97,7 +101,62 @@ def _ticker_history(symbol: str) -> pd.DataFrame:
         return pd.concat(frames, ignore_index=True)
     return pd.DataFrame()
 
-bp.jinja_env.globals["sec_url"] = sec_url
+#bp.jinja_env.globals["sec_url"] = sec_url
+
+@bp.route("/api/signals/latest")
+def api_signals_latest():
+    session = SessionLocal()
+    try:
+        run_date = request.args.get("run_date")  # optional
+        q = session.query(Signal)
+        if run_date:
+            q = q.filter(Signal.run_date == run_date)
+        rows = q.order_by(Signal.created_at.desc()).limit(500).all()
+        return jsonify([r.raw for r in rows])
+    finally:
+        session.close()
+
+
+@bp.route("/api/option_matrix")
+def api_option_matrix():
+    symbol = request.args.get("symbol")
+    run_date = request.args.get("run_date")
+    if not symbol or not run_date:
+        return jsonify({"error": "symbol and run_date required"}), 400
+    session = SessionLocal()
+    try:
+        rows = session.query(OptionTick).filter(
+            OptionTick.symbol == symbol,
+            OptionTick.run_date == run_date
+        ).all()
+        # assemble maps
+        expiries = sorted({r.expiry for r in rows})
+        strikes = sorted({r.strike for r in rows})
+        # map expiry->strike->iv / oi / volume
+        iv_map = { (e,s): None for e in expiries for s in strikes }
+        oi_map = { (e,s): 0 for e in expiries for s in strikes }
+        vol_map = { (e,s): 0 for e in expiries for s in strikes }
+        for r in rows:
+            key = (r.expiry, r.strike)
+            # choose average if multiple
+            iv_map[key] = (iv_map[key] + r.implied_vol)/2 if iv_map[key] else r.implied_vol
+            oi_map[key] = max(oi_map[key] or 0, r.open_interest or 0)
+            vol_map[key] = (vol_map[key] or 0) + (r.volume or 0)
+
+        # build 2D lists for Plotly
+        iv_matrix = [[iv_map.get((e,s)) for s in strikes] for e in expiries]
+        oi_matrix = [[oi_map.get((e,s)) for s in strikes] for e in expiries]
+        vol_matrix = [[vol_map.get((e,s)) for s in strikes] for e in expiries]
+
+        return jsonify({
+            "expiries": expiries,
+            "strikes": strikes,
+            "iv_matrix": iv_matrix,
+            "oi_matrix": oi_matrix,
+            "vol_matrix": vol_matrix
+        })
+    finally:
+        session.close()
 
 @bp.route("/")
 def index():
@@ -183,8 +242,8 @@ def monthly():
 def search():
     symbol = (request.args.get("symbol") or "").strip().upper()
     if not symbol:
-        return redirect(url_for("index"))
-    return redirect(url_for("ticker_view", symbol=symbol))
+        return redirect(url_for("api.index"))
+    return redirect(url_for("api.ticker_view", symbol=symbol))
 
 
 @bp.route("/ticker/<symbol>")

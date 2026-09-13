@@ -23,7 +23,7 @@
       {% for row in rows %}
       <tr>
         <td>
-          <a href="{{ url_for('day_view', date_str=row['scan_date'], symbol=symbol) }}">
+          <a href="{{ url_for('api.day_view', date_str=row['scan_date'], symbol=symbol) }}">
             {{ row['scan_date'] }}
           </a>
         </td>
