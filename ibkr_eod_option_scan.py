@@ -39,6 +39,10 @@ from collections import deque
 from filing_parser import MasterParserClass
 import settings as settings
 
+from flask_dashboard.db import SessionLocal, init_db
+from flask_dashboard.models import Signal, OptionTick
+import dateutil.parser
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -49,7 +53,7 @@ logging.basicConfig(
 logging.getLogger("ibapi").setLevel(logging.WARNING)
 
 # Mandatory SEC EDGAR identification string
-set_identity("") # Email + name etc
+set_identity("SpecialSituationsQuant Engine securedhummer@gmail.com") # For the love of God, please use your own email address here
 #httpclient.update_rate_limiter(requests_per_second=5) # 5 requests per second, to be safe
 
 
@@ -106,6 +110,98 @@ def _safe_int(val, default=0):
     except (ValueError, TypeError):
         return default
 
+class DBUtils:
+    '''
+    Utility class for database operations.
+    '''
+    def save_signals_to_db(rows: list):
+        if not rows:
+            return
+        session = SessionLocal()
+        try:
+            objs = []
+            for r in rows:
+                # map keys - keep raw copy too
+                s = Signal(
+                run_date = dateutil.parser.parse(r["timestamp"]).date(),
+                timestamp = dateutil.parser.parse(r["timestamp"]),
+                symbol = r.get("symbol"),
+                last_price = r.get("last_price"),
+                current_iv = r.get("current_iv"),
+                iv_rank_52wk = r.get("iv_rank_52wk"),
+                iv_pct_52wk = r.get("iv_pct_52wk"),
+                iv_rank_13wk = r.get("iv_rank_13wk"),
+                iv_pct_13wk = r.get("iv_pct_13wk"),
+                put_call_ratio = r.get("put_call_ratio"),
+                call_volume = r.get("call_volume"),
+                put_volume = r.get("put_volume"),
+                opt_volume = r.get("opt_volume"),
+                av_option_volume = r.get("av_option_volume"),
+                opt_vol_expansion_ratio = r.get("opt_vol_expansion_ratio"),
+                market_regime = r.get("market_regime"),
+                is_coiling = int(r.get("is_coiling", 0)),
+                dist_to_200dma = r.get("dist_to_200dma"),
+                contraction_mean = r.get("contraction_mean"),
+                contraction_median = r.get("contraction_median"),
+                triangle_flag = r.get("triangle_flag"),
+                high_slope = r.get("high_slope"),
+                low_slope = r.get("low_slope"),
+
+                atm_volume_skews = r.get("atm_volume_skews"),
+                atm_dominant_expiry_by_vol = r.get("atm_dominant_expiry_by_vol"),
+                atm_dominant_expiry_by_oi = r.get("atm_dominant_expiry_by_oi"),
+                atm_oi_depth = r.get("atm_oi_depth"),
+                atm_oi_skews = r.get("atm_oi_skews"),
+
+                # ... continue mapping fields you need ...
+                raw = r
+                )
+                objs.append(s)
+            session.bulk_save_objects(objs)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def save_option_rows_to_db(symbol: str, rows: list):
+        if not rows:
+            return
+        session = SessionLocal()
+        try:
+            objs = []
+            for r in rows:
+                ot = OptionTick(
+                    run_date = r.get("timestamp").date() if hasattr(r.get("timestamp"), "date") else dateutil.parser.parse(r.get("timestamp")).date(),
+                    timestamp = r.get("timestamp"),
+                    symbol = r.get("symbol") or symbol,
+                    conid = r.get("conId"),
+                    expiry = r.get("expiry"),
+                    strike = r.get("strike"),
+                    right = r.get("right"),
+                    multiplier = r.get("multiplier"),
+                    trading_class = r.get("trading_class"),
+                    bid = r.get("bid"),
+                    ask = r.get("ask"),
+                    last = r.get("last"),
+                    implied_vol = r.get("implied_vol"),
+                    delta = r.get("delta"),
+                    open_interest = r.get("open_interest"),
+                    volume = r.get("volume"),
+                    iv_source = r.get("iv_source"),
+                    sample_type = r.get("sample_type"),
+                    src = r.get("src", "IBKR"),
+                    raw = r
+                )
+                objs.append(ot)
+            session.bulk_save_objects(objs)
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
 class TickerSnapshot:
     """
@@ -1236,6 +1332,7 @@ class Pillar1MarketData:
             total_call_vol_all = 0
 
             logging.info(f"Analysing {len(opt_tickers)} qualified option tickers returned...")
+            opt_rows = []
             for ot in opt_tickers:
                 oi  = _safe_int(getattr(ot, 'openInterest', 0))
                 vol = _safe_int(getattr(ot, 'volume',       0))
@@ -1249,6 +1346,27 @@ class Pillar1MarketData:
                     f"OI={oi}, Vol={vol}, IV={ot.impliedVol}, delta={ot.delta}"
                     f"{'  [OI leg]' if is_oi_strike else '  [wing/deal only]'}"
                 )
+
+                opt_rows.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "symbol": ot.contract.symbol,
+                    "conId": getattr(ot.contract, "conId", None),
+                    "expiry": getattr(ot.contract, "lastTradeDateOrContractMonth", ""),
+                    "strike": float(getattr(ot.contract, "strike", 0.0)),
+                    "right": getattr(ot.contract, "right", ""),
+                    "multiplier": getattr(ot.contract, "multiplier", None),
+                    "trading_class": getattr(ot.contract, "tradingClass", None),
+                    "open_interest": oi,
+                    "volume": vol,
+                    "implied_vol": getattr(ot, "impliedVol", None),
+                    "delta": getattr(ot, "delta", None),
+                    "gamma": getattr(ot, "gamma", None),
+                    "theta": getattr(ot, "theta", None),
+                    "last": getattr(ot, "last", None),
+                    "bid": getattr(ot, "bid", None),
+                    "ask": getattr(ot, "ask", None),
+                    "run_date": datetime.now().strftime('%Y-%m-%d'),
+                })
 
                 # ── ATM OI/volume leg: only OI_ANALYSIS_STRIKE_COUNT strikes ──
                 if is_oi_strike:
@@ -1422,6 +1540,12 @@ class Pillar1MarketData:
                     worst_anomaly_expiry = exp
 
             term_structure_flag = int(worst_anomaly_pct >= self.TERM_STRUCTURE_ANOMALY_THRESHOLD_PCT)
+
+            try:
+                db_utils = DBUtils()
+                db_utils.insert_option_chain_analysis(contract.symbol, opt_rows)
+            except Exception as e:
+                logging.error(f"Failed to insert option chain analysis data for {contract.symbol}: {e}")
 
             return {
                 "atm_volume_skews":    round(float(total_call_vol) / float(total_put_vol or 1), 2),
@@ -2002,6 +2126,12 @@ class ConvergencePipeline:
         finally:
             self.ib_broker.disconnect()
 
+        db_utils = DBUtils()
+        try:
+            db_utils.save_signals_to_db(self.feature_store)
+        except Exception as e:
+            logging.error(f"Failed to save signals to database: {e}")
+
         self.export_to_feature_store()
 
     # ── Export ────────────────────────────────────────────────────────────────
@@ -2081,6 +2211,7 @@ def internal_sec_filing_fetcher(symbol, forms, days_lookback):
 # Entry point
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
+    init_db()
     parser_module = Pillar3CustomParser(filing_fetcher_func=internal_sec_filing_fetcher)
     pipeline      = ConvergencePipeline(custom_parser_engine=parser_module)
 
