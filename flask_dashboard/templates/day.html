@@ -2,6 +2,26 @@
 {% block content %}
 <h2>Scan: {{ date_str }}</h2>
 
+{% macro render_row(r, columns, date_str) -%}
+<tr onclick="toggleRowHighlight(this)">
+  <td class="sticky-col-1">
+    <div class="link-stack">
+      <a href="/day/{{ date_str }}?symbol={{ r.symbol }}">Chart</a>
+      <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a>
+      <a href="{{ sec_url(r.symbol, '8-K') }}" target="_blank">8-K</a>
+      <a href="{{ sec_url(r.symbol, '10-Q') }}" target="_blank">10-Q</a>
+      <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
+    </div>
+  </td>
+  <td class="sticky-col-2"><a href="{{ url_for('ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
+  {% for c in columns %}
+    {% if c != 'symbol' %}
+      <td>{{ r[c] }}</td>
+    {% endif %}
+  {% endfor %}
+</tr>
+{%- endmacro %}
+
 <style>
   /* 1. Wrap the table to allow independent horizontal scrolling */
   .table-container {
@@ -88,6 +108,7 @@
 </div>
 {% endif %}
 
+<!-- Tier 1 table: highest conviction scores -->
 <div class="table-container">
   <table>
     <thead>
@@ -102,28 +123,62 @@
       </tr>
     </thead>
     <tbody>
-      {% for r in rows %}
-        <tr onclick="toggleRowHighlight(this)">
-          <td class="sticky-col-1">
-            <div class="link-stack">
-              <a href="/day/{{ date_str }}?symbol={{ r.symbol }}">Chart</a>
-              <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a>
-              <a href="{{ sec_url(r.symbol, '8-K') }}" target="_blank">8-K</a>
-              <a href="{{ sec_url(r.symbol, '10-Q') }}" target="_blank">10-Q</a>
-              <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
-            </div>
-          </td>
-          <td class="sticky-col-2"><a href="{{ url_for('ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
-          {% for c in columns %}
-            {% if c != 'symbol' %}
-              <td>{{ r[c] }}</td>
-            {% endif %}
-          {% endfor %}
-        </tr>
+      {% for r in tier1_rows %}
+        {{ render_row(r, columns, date_str) }}
       {% endfor %}
     </tbody>
   </table>
 </div>
+
+<!-- Tier 2 table: medium conviction scores -->
+<details style="margin-top:10px;">
+  <summary>Show Tier 2 (medium insider conviction scores) — {{ tier2_rows|length }} rows</summary>
+  <div class="table-container" style="margin-top:8px;">
+    <table>
+      <thead>
+        <tr>
+          <th class="sticky-col-1">Links</th>
+          <th class="sticky-col-2">Symbol</th>
+          {% for c in columns %}
+            {% if c != 'symbol' %}
+              <th>{{ c }}</th>
+            {% endif %}
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in tier2_rows %}
+          {{ render_row(r, columns, date_str) }}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<!-- Tier 3 table: lowest conviction scores -->
+<details style="margin-top:10px;">
+  <summary>Show Tier 3 (lowest insider conviction scores) — {{ tier3_rows|length }} rows</summary>
+  <div class="table-container" style="margin-top:8px;">
+    <table>
+      <thead>
+        <tr>
+          <th class="sticky-col-1">Links</th>
+          <th class="sticky-col-2">Symbol</th>
+          {% for c in columns %}
+            {% if c != 'symbol' %}
+              <th>{{ c }}</th>
+            {% endif %}
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in tier3_rows %}
+          {{ render_row(r, columns, date_str) }}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
 
 <script>
   // Simple JavaScript function to handle row selection
