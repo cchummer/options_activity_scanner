@@ -114,7 +114,7 @@ class DBUtils:
     '''
     Utility class for database operations.
     '''
-    def save_signals_to_db(rows: list):
+    def save_signals_to_db(self, rows: list):
         if not rows:
             return
         session = SessionLocal()
@@ -165,7 +165,7 @@ class DBUtils:
         finally:
             session.close()
 
-    def save_option_rows_to_db(symbol: str, rows: list):
+    def save_option_rows_to_db(self, symbol: str, rows: list):
         if not rows:
             return
         session = SessionLocal()
@@ -1543,7 +1543,7 @@ class Pillar1MarketData:
 
             try:
                 db_utils = DBUtils()
-                db_utils.insert_option_chain_analysis(contract.symbol, opt_rows)
+                db_utils.save_option_rows_to_db(contract.symbol, opt_rows)
             except Exception as e:
                 logging.error(f"Failed to insert option chain analysis data for {contract.symbol}: {e}")
 
@@ -2038,6 +2038,12 @@ class ConvergencePipeline:
         finally:
             self.ib_broker.disconnect()
 
+        db_utils = DBUtils()
+        try:
+            db_utils.save_signals_to_db(self.feature_store)
+        except Exception as e:
+            logging.error(f"Failed to save signals to database: {e}")
+        
         self.export_to_feature_store()
 
     # ── Weekend / test build (was async) ─────────────────────────────────────
