@@ -1,48 +1,64 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Rolling {{ days }} Trading Days</h2>
+<div class="card">
+  <h2 style="margin:0;">Rolling {{ days }} Trading Days</h2>
+  <form action="{{ url_for('api.rolling_query_view') }}" method="get" class="search-form" style="margin-top:10px;">
+    <label for="days"><strong>Lookback days</strong></label>
+    <input id="days" name="days" type="number" min="1" max="180" value="{{ days }}">
+    <button type="submit">Update</button>
+    <span class="muted">Range: 1–180</span>
+  </form>
+</div>
 
-<h3>Tickers appearing multiple days</h3>
-<table>
-  <thead>
-    <tr>
-      <th>Symbol</th>
-      <th>Appearances</th>
-      <th>Days</th>
-      <th>Industry</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in rows %}
-      <tr>
-        <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
-        <td>{{ r.appearances }}</td>
-        <td>
-          {% for d in r.days %}
-            <a href="{{ url_for('api.day_view', date_str=d, symbol=r.symbol) }}">{{ d }}</a>{% if not loop.last %}, {% endif %}
-          {% endfor %}
-        </td>
-        <td>{{ r.industry }}</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="card">
+  <h3 style="margin-top:0;">Tickers appearing multiple days</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Appearances</th>
+          <th>Days</th>
+          <th>Industry</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          <tr>
+            <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
+            <td>{{ r.appearances }}</td>
+            <td>
+              {% for d in r.days %}
+                <a href="{{ url_for('api.day_view', date_str=d, symbol=r.symbol) }}">{{ d }}</a>{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            </td>
+            <td>{{ r.industry }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 
-<h3>Industry Breakdown</h3>
-<table>
-  <thead>
-    <tr>
-      <th>Industry</th>
-      <th>Tickers</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for r in industries %}
-      <tr>
-        <td>{{ r.industry }}</td>
-        <td>{{ r.ticker_count }}</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="card">
+  <h3 style="margin-top:0;">Industry Breakdown</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Industry</th>
+          <th>Tickers</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in industries %}
+          <tr>
+            <td>{{ r.industry }}</td>
+            <td>{{ r.ticker_count }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
 {% endblock %}

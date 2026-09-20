@@ -2,34 +2,150 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or "Scanner Dashboard" }}</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 24px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border: 1px solid #ddd; padding: 6px 8px; font-size: 12px; }
-    th { background: #f4f4f4; }
-    .nav a { margin-right: 12px; }
-    .chart { margin: 16px 0; }
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --ink: #17263d;
+      --muted: #5d6c83;
+      --line: #dce4f0;
+      --brand: #175ddc;
+      --ok: #1f8b4c;
+      --warn: #b15a00;
+      --bad: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.4 "Inter", "Segoe UI", Arial, sans-serif;
+    }
+    .shell {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+      align-items: center;
+    }
+    .nav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .nav a {
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 12px;
+      color: var(--ink);
+      background: var(--card);
+      font-weight: 600;
+    }
+    .nav a:hover { border-color: #a7bbdb; }
+    .search-form {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .search-form input, .search-form select, .search-form button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: var(--card);
+      color: var(--ink);
+    }
+    .search-form button {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+    }
+    .kpi {
+      background: #f7faff;
+      border: 1px solid #d7e3fa;
+      border-radius: 10px;
+      padding: 10px;
+    }
+    .kpi .label { color: var(--muted); font-size: 12px; display: block; }
+    .kpi .value { font-size: 18px; font-weight: 700; }
+    .table-wrap { overflow: auto; }
+    table { border-collapse: collapse; width: 100%; background: var(--card); }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 7px 8px;
+      font-size: 12px;
+      vertical-align: top;
+    }
+    th { background: #eef3fc; text-align: left; position: sticky; top: 0; z-index: 2; }
+    .muted { color: var(--muted); }
+    .badge {
+      display: inline-block;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      padding: 2px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .badge.good { color: var(--ok); background: #e8f7ee; border-color: #bde7cb; }
+    .badge.warn { color: var(--warn); background: #fff3e7; border-color: #f3d2aa; }
+    .badge.bad { color: var(--bad); background: #feeceb; border-color: #f8c9c5; }
+    .badge.neutral { color: #35547a; background: #ebf2ff; border-color: #c8dbff; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+      gap: 12px;
+    }
+    .plot { min-height: 300px; }
+    details summary { cursor: pointer; font-weight: 600; }
   </style>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
-  <div class="nav">
-    <a href="/">Home</a>
-    <a href="/weekly">Rolling 7d</a>
-    <a href="/monthly">Rolling 30d</a>
+  <div class="shell">
+    <div class="topbar">
+      <div class="nav">
+        <a href="/">Home</a>
+        <a href="/weekly">Rolling 7d</a>
+        <a href="/monthly">Rolling 30d</a>
+      </div>
+      <form action="{{ url_for('api.search') }}" method="get" class="search-form">
+        <input
+          type="text"
+          name="symbol"
+          placeholder="Search ticker (e.g. AAPL)"
+          style="text-transform: uppercase;"
+          autocomplete="off"
+          required
+        >
+        <button type="submit">Go</button>
+      </form>
+    </div>
+    {% block content %}
+    {% endblock %}
   </div>
-  <form action="{{ url_for('api.search') }}" method="get" style="margin-bottom: 1.5rem;">
-    <input
-      type="text"
-      name="symbol"
-      placeholder="Search ticker (e.g. AAPL)"
-      style="text-transform: uppercase;"
-      autocomplete="off"
-      required
-    >
-    <button type="submit">Go</button>
-  </form>
-  {% block content %}
-  {% endblock %}
 </body>
 </html>
