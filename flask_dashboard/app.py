@@ -1,5 +1,5 @@
 from flask import Flask
-from routes import bp as api_bp
+from .routes import bp as api_bp
 import os
 import logging
 

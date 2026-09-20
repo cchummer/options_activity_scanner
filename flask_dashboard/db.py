@@ -1,9 +1,9 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Base
+from .models import Base
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/options_db")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:1723@localhost:5432/ibkr_options_scanner")
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine)

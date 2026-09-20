@@ -110,6 +110,24 @@ def _safe_int(val, default=0):
     except (ValueError, TypeError):
         return default
 
+def _json_safe(value):
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+
+    if isinstance(value, (float, np.floating)):
+        return float(value) if np.isfinite(value) else None
+
+    if isinstance(value, (np.integer,)):
+        return int(value)
+
+    if isinstance(value, (np.bool_,)):
+        return bool(value)
+
+    return value
+
 class DBUtils:
     '''
     Utility class for database operations.
@@ -121,40 +139,38 @@ class DBUtils:
         try:
             objs = []
             for r in rows:
-                # map keys - keep raw copy too
+                safe_raw = _json_safe(r)
+
                 s = Signal(
-                run_date = dateutil.parser.parse(r["timestamp"]).date(),
-                timestamp = dateutil.parser.parse(r["timestamp"]),
-                symbol = r.get("symbol"),
-                last_price = r.get("last_price"),
-                current_iv = r.get("current_iv"),
-                iv_rank_52wk = r.get("iv_rank_52wk"),
-                iv_pct_52wk = r.get("iv_pct_52wk"),
-                iv_rank_13wk = r.get("iv_rank_13wk"),
-                iv_pct_13wk = r.get("iv_pct_13wk"),
-                put_call_ratio = r.get("put_call_ratio"),
-                call_volume = r.get("call_volume"),
-                put_volume = r.get("put_volume"),
-                opt_volume = r.get("opt_volume"),
-                av_option_volume = r.get("av_option_volume"),
-                opt_vol_expansion_ratio = r.get("opt_vol_expansion_ratio"),
-                market_regime = r.get("market_regime"),
-                is_coiling = int(r.get("is_coiling", 0)),
-                dist_to_200dma = r.get("dist_to_200dma"),
-                contraction_mean = r.get("contraction_mean"),
-                contraction_median = r.get("contraction_median"),
-                triangle_flag = r.get("triangle_flag"),
-                high_slope = r.get("high_slope"),
-                low_slope = r.get("low_slope"),
-
-                atm_volume_skews = r.get("atm_volume_skews"),
-                atm_dominant_expiry_by_vol = r.get("atm_dominant_expiry_by_vol"),
-                atm_dominant_expiry_by_oi = r.get("atm_dominant_expiry_by_oi"),
-                atm_oi_depth = r.get("atm_oi_depth"),
-                atm_oi_skews = r.get("atm_oi_skews"),
-
-                # ... continue mapping fields you need ...
-                raw = r
+                    run_date=dateutil.parser.parse(r["timestamp"]).date(),
+                    timestamp=dateutil.parser.parse(r["timestamp"]),
+                    symbol=r.get("symbol"),
+                    last_price=r.get("last_price"),
+                    current_iv=r.get("current_iv"),
+                    iv_rank_52wk=r.get("iv_rank_52wk"),
+                    iv_pct_52wk=r.get("iv_pct_52wk"),
+                    iv_rank_13wk=r.get("iv_rank_13wk"),
+                    iv_pct_13wk=r.get("iv_pct_13wk"),
+                    put_call_ratio=r.get("put_call_ratio"),
+                    call_volume=r.get("call_volume"),
+                    put_volume=r.get("put_volume"),
+                    opt_volume=r.get("opt_volume"),
+                    av_option_volume=r.get("av_option_volume"),
+                    opt_vol_expansion_ratio=r.get("opt_vol_expansion_ratio"),
+                    market_regime=r.get("market_regime"),
+                    is_coiling=int(r.get("is_coiling", 0)),
+                    dist_to_200dma=r.get("dist_to_200dma"),
+                    contraction_mean=r.get("contraction_mean"),
+                    contraction_median=r.get("contraction_median"),
+                    triangle_flag=r.get("triangle_flag"),
+                    high_slope=r.get("high_slope"),
+                    low_slope=r.get("low_slope"),
+                    atm_volume_skews=r.get("atm_volume_skews"),
+                    atm_dominant_expiry_by_vol=r.get("atm_dominant_expiry_by_vol"),
+                    atm_dominant_expiry_by_oi=r.get("atm_dominant_expiry_by_oi"),
+                    atm_oi_depth=r.get("atm_oi_depth"),
+                    atm_oi_skews=r.get("atm_oi_skews"),
+                    raw=safe_raw,
                 )
                 objs.append(s)
             session.bulk_save_objects(objs)
@@ -172,6 +188,8 @@ class DBUtils:
         try:
             objs = []
             for r in rows:
+                safe_raw = _json_safe(r)
+                
                 ot = OptionTick(
                     run_date = r.get("timestamp").date() if hasattr(r.get("timestamp"), "date") else dateutil.parser.parse(r.get("timestamp")).date(),
                     timestamp = r.get("timestamp"),
@@ -187,12 +205,15 @@ class DBUtils:
                     last = r.get("last"),
                     implied_vol = r.get("implied_vol"),
                     delta = r.get("delta"),
+                    gamma=r.get("gamma"),
+                    vega=r.get("vega"),
+                    theta=r.get("theta"),
                     open_interest = r.get("open_interest"),
                     volume = r.get("volume"),
                     iv_source = r.get("iv_source"),
                     sample_type = r.get("sample_type"),
                     src = r.get("src", "IBKR"),
-                    raw = r
+                    raw = safe_raw
                 )
                 objs.append(ot)
             session.bulk_save_objects(objs)
@@ -215,7 +236,7 @@ class TickerSnapshot:
         'openInterest', 'volume',                       # OPT contract-level
         'pcRatio',  # Put/Call ratio
         'impliedVol',
-        'delta',
+        'delta', 'gamma', 'theta', 'vega'
     )
 
     def __init__(self, contract: Contract):
@@ -230,7 +251,9 @@ class TickerSnapshot:
         self.pcRatio         = None
         self.impliedVol      = None
         self.delta           = None
-
+        self.gamma           = None
+        self.theta           = None
+        self.vega            = None
 # ══════════════════════════════════════════════════════════════════════════════
 # IBKRApp  —  thin EWrapper / EClient
 # ══════════════════════════════════════════════════════════════════════════════
@@ -434,24 +457,99 @@ class IBKRApp(EWrapper, EClient):
 
     # ── Option computation callback (IV, delta, gamma, etc.) ───────────────────
 
-    def tickOptionComputation(self, reqId, tickType, tickAttrib,
-                              impliedVol, delta, optPrice, pvDividend,
-                              gamma, vega, theta, undPrice):
+    def tickOptionComputation(
+        self,
+        reqId,
+        tickType,
+        tickAttrib,
+        impliedVol,
+        delta,
+        optPrice,
+        pvDividend,
+        gamma,
+        vega,
+        theta,
+        undPrice,
+    ):
         """
-        Fires when generic tick 106 is requested on an OPT contract.
-        impliedVol arrives as -1 or DBL_MAX when TWS can't compute it
-        (e.g. no valid bid/ask to solve against) — filter both sentinels.
-        Stores per computation-source (model/bid/ask/last) so callers can
-        prefer the model IV, matching what TWS displays in the option chain.
+        Store option-model outputs by computation source.
+
+        IBKR sends this callback for several computation fields:
+
+            10 = bid option computation
+            11 = ask option computation
+            12 = last option computation
+            13 = model option computation
+
+        Values are stored by source first. Pillar1MarketData later chooses the
+        preferred source, normally MODEL first, then LAST, ASK, BID.
         """
-        slot  = self._get(reqId)
+        slot = self._get(reqId)
         ticks = slot.get("ticks")
+
         if ticks is None:
             return
-        if impliedVol is not None and 0 < impliedVol <= 5:
-            ticks.setdefault("iv_by_source", {})[tickType] = impliedVol
-        if delta is not None and abs(delta) <= 1:
-            ticks.setdefault("delta_by_source", {})[tickType] = delta
+
+        def valid_number(value):
+            """
+            IBKR may use sentinel values such as -1 or a very large DBL_MAX-like
+            value when a value cannot be calculated.
+            """
+            if value is None:
+                return None
+
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+
+            if not math.isfinite(value):
+                return None
+
+            # Reject unrealistic DBL_MAX-style values.
+            if abs(value) > 1e10:
+                return None
+
+            return value
+
+        iv_value = valid_number(impliedVol)
+        delta_value = valid_number(delta)
+        gamma_value = valid_number(gamma)
+        vega_value = valid_number(vega)
+        theta_value = valid_number(theta)
+        option_price_value = valid_number(optPrice)
+        pv_dividend_value = valid_number(pvDividend)
+        underlying_price_value = valid_number(undPrice)
+
+        # IV is normally positive and represented as a decimal:
+        # 0.25 means approximately 25% implied volatility.
+        if iv_value is not None and not (0 < iv_value <= 5):
+            iv_value = None
+
+        # Delta should generally fall within [-1, 1].
+        if delta_value is not None and abs(delta_value) > 1:
+            delta_value = None
+
+        # Gamma, vega, and theta are not constrained to the same range as delta.
+        # In particular, theta is commonly negative, so do not reject negative
+        # values here.
+        computation = {
+            "implied_vol": iv_value,
+            "delta": delta_value,
+            "gamma": gamma_value,
+            "vega": vega_value,
+            "theta": theta_value,
+            "opt_price": option_price_value,
+            "pv_dividend": pv_dividend_value,
+            "underlying_price": underlying_price_value,
+            "tick_attrib": tickAttrib,
+        }
+
+        # Store the complete computation by source.
+        ticks.setdefault(
+            "option_computation_by_source",
+            {}
+        )[tickType] = computation
 
 
 class SimpleRateLimiter:
@@ -1017,6 +1115,38 @@ class Pillar1MarketData:
 
     # ── Option market data — chunked streaming (OI + volume) ─────────────────
 
+    @staticmethod
+    def _preferred_option_computation(ticks: dict) -> dict:
+        """
+        Select the best available option computation.
+
+        Preference order:
+            13 = model
+            12 = last
+            11 = ask
+            10 = bid
+
+        The model computation is preferred because it is the most consistent
+        single representation for displaying the option surface. If it is not
+        available, fall back to last, ask, then bid.
+        """
+        computations = ticks.get("option_computation_by_source", {})
+
+        preferred_sources = (
+            OPT_COMP_MODEL,
+            OPT_COMP_LAST,
+            OPT_COMP_ASK,
+            OPT_COMP_BID,
+        )
+
+        for source in preferred_sources:
+            computation = computations.get(source)
+
+            if computation:
+                return computation
+
+        return {}
+    
     def safe_fetch_tickers(self, contracts: list, chunk_size: int = 40) -> list:
         all_tickers     = []
         valid_contracts = [c for c in contracts if getattr(c, 'conId', 0)]
@@ -1056,21 +1186,14 @@ class Pillar1MarketData:
                     elif ticker.contract.right == 'P':
                         ticker.openInterest = _safe_int(ticks.get(TICK_PUT_OI))
 
-                    iv_by_source = ticks.get("iv_by_source", {})
-                    ticker.impliedVol = (
-                        iv_by_source.get(OPT_COMP_MODEL)
-                        or iv_by_source.get(OPT_COMP_LAST)
-                        or iv_by_source.get(OPT_COMP_ASK)
-                        or iv_by_source.get(OPT_COMP_BID)
-                    )
+                    computation = self._preferred_option_computation(ticks)
 
-                    delta_by_source = ticks.get("delta_by_source", {})
-                    ticker.delta = (
-                        delta_by_source.get(OPT_COMP_MODEL)
-                        or delta_by_source.get(OPT_COMP_LAST)
-                        or delta_by_source.get(OPT_COMP_ASK)
-                        or delta_by_source.get(OPT_COMP_BID)
-                    )
+                    ticker.impliedVol = computation.get("implied_vol")
+                    ticker.delta = computation.get("delta")
+                    ticker.gamma = computation.get("gamma")
+                    ticker.vega = computation.get("vega")
+                    ticker.theta = computation.get("theta")
+                    ticker.underlyingPrice = computation.get("underlying_price")
 
                     chunk_tickers.append(ticker)
 
@@ -1094,22 +1217,25 @@ class Pillar1MarketData:
                     self._release_line_budget()
                     ticker.volume = _safe_int(ticks.get(TICK_OPT_CONTRACT_VOLUME))
 
+                    fallback_computation = self._preferred_option_computation(ticks)
+
                     if ticker.impliedVol is None:
-                        iv_by_source = ticks.get("iv_by_source", {})
-                        ticker.impliedVol = (
-                            iv_by_source.get(OPT_COMP_MODEL)
-                            or iv_by_source.get(OPT_COMP_LAST)
-                            or iv_by_source.get(OPT_COMP_ASK)
-                            or iv_by_source.get(OPT_COMP_BID)
-                        )
+                        ticker.impliedVol = fallback_computation.get("implied_vol")
+
                     if ticker.delta is None:
-                        delta_by_source = ticks.get("delta_by_source", {})
-                        ticker.delta = (
-                            delta_by_source.get(OPT_COMP_MODEL)
-                            or delta_by_source.get(OPT_COMP_LAST)
-                            or delta_by_source.get(OPT_COMP_ASK)
-                            or delta_by_source.get(OPT_COMP_BID)
-                        )
+                        ticker.delta = fallback_computation.get("delta")
+
+                    if ticker.gamma is None:
+                        ticker.gamma = fallback_computation.get("gamma")
+
+                    if ticker.vega is None:
+                        ticker.vega = fallback_computation.get("vega")
+
+                    if ticker.theta is None:
+                        ticker.theta = fallback_computation.get("theta")
+
+                    if ticker.underlyingPrice is None:
+                        ticker.underlyingPrice = fallback_computation.get("underlying_price")
 
                 self._app.reqMarketDataType(1)
                 all_tickers.extend(chunk_tickers)
@@ -1351,21 +1477,31 @@ class Pillar1MarketData:
                     "timestamp": datetime.now().isoformat(),
                     "symbol": ot.contract.symbol,
                     "conId": getattr(ot.contract, "conId", None),
-                    "expiry": getattr(ot.contract, "lastTradeDateOrContractMonth", ""),
+                    "expiry": getattr(
+                        ot.contract,
+                        "lastTradeDateOrContractMonth",
+                        "",
+                    ),
                     "strike": float(getattr(ot.contract, "strike", 0.0)),
                     "right": getattr(ot.contract, "right", ""),
                     "multiplier": getattr(ot.contract, "multiplier", None),
                     "trading_class": getattr(ot.contract, "tradingClass", None),
+
                     "open_interest": oi,
                     "volume": vol,
+
                     "implied_vol": getattr(ot, "impliedVol", None),
                     "delta": getattr(ot, "delta", None),
                     "gamma": getattr(ot, "gamma", None),
+                    "vega": getattr(ot, "vega", None),
                     "theta": getattr(ot, "theta", None),
+
                     "last": getattr(ot, "last", None),
                     "bid": getattr(ot, "bid", None),
                     "ask": getattr(ot, "ask", None),
-                    "run_date": datetime.now().strftime('%Y-%m-%d'),
+
+                    "underlying_price": getattr(ot, "underlyingPrice", None),
+                    "run_date": datetime.now().strftime("%Y-%m-%d"),
                 })
 
                 # ── ATM OI/volume leg: only OI_ANALYSIS_STRIKE_COUNT strikes ──

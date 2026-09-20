@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, abort, redirect, url_for, jsonify
-from db import SessionLocal
-from models import Signal, OptionTick
+from .db import SessionLocal
+from .models import Signal, OptionTick
 from sqlalchemy import func
 from pathlib import Path
 from datetime import datetime
@@ -116,45 +116,281 @@ def api_signals_latest():
     finally:
         session.close()
 
-
 @bp.route("/api/option_matrix")
 def api_option_matrix():
-    symbol = request.args.get("symbol")
-    run_date = request.args.get("run_date")
-    if not symbol or not run_date:
-        return jsonify({"error": "symbol and run_date required"}), 400
-    session = SessionLocal()
-    try:
-        rows = session.query(OptionTick).filter(
-            OptionTick.symbol == symbol,
-            OptionTick.run_date == run_date
-        ).all()
-        # assemble maps
-        expiries = sorted({r.expiry for r in rows})
-        strikes = sorted({r.strike for r in rows})
-        # map expiry->strike->iv / oi / volume
-        iv_map = { (e,s): None for e in expiries for s in strikes }
-        oi_map = { (e,s): 0 for e in expiries for s in strikes }
-        vol_map = { (e,s): 0 for e in expiries for s in strikes }
-        for r in rows:
-            key = (r.expiry, r.strike)
-            # choose average if multiple
-            iv_map[key] = (iv_map[key] + r.implied_vol)/2 if iv_map[key] else r.implied_vol
-            oi_map[key] = max(oi_map[key] or 0, r.open_interest or 0)
-            vol_map[key] = (vol_map[key] or 0) + (r.volume or 0)
+    """
+    Return end-of-day option matrices for one symbol and scan date.
 
-        # build 2D lists for Plotly
-        iv_matrix = [[iv_map.get((e,s)) for s in strikes] for e in expiries]
-        oi_matrix = [[oi_map.get((e,s)) for s in strikes] for e in expiries]
-        vol_matrix = [[vol_map.get((e,s)) for s in strikes] for e in expiries]
+    Matrix dimensions:
+        rows    = expiries
+        columns = strikes
+
+    The database is expected to contain one call row and one put row for
+    each symbol/run_date/expiry/strike combination.
+    """
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    run_date = (request.args.get("run_date") or "").strip()
+
+    if not symbol or not run_date:
+        return jsonify({
+            "error": "symbol and run_date required"
+        }), 400
+
+    session = SessionLocal()
+
+    try:
+        rows = (
+            session.query(OptionTick)
+            .filter(
+                OptionTick.symbol == symbol,
+                OptionTick.run_date == run_date,
+            )
+            .all()
+        )
+
+        if not rows:
+            return jsonify({
+                "error": f"No option data found for {symbol} on {run_date}"
+            }), 404
+
+        def safe_float(value):
+            if value is None:
+                return None
+
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+
+            if pd.isna(value):
+                return None
+
+            return value
+
+        def safe_int(value):
+            if value is None:
+                return 0
+
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                return 0
+
+            return max(0, value)
+
+        # Keep only rows that can participate in a heatmap cell.
+        valid_rows = [
+            row for row in rows
+            if row.expiry is not None
+            and row.strike is not None
+            and str(row.right).upper() in {"C", "P"}
+        ]
+
+        if not valid_rows:
+            return jsonify({
+                "error": f"No valid option rows found for {symbol} on {run_date}"
+            }), 404
+
+        expiries = sorted({
+            str(row.expiry)
+            for row in valid_rows
+        })
+
+        strikes = sorted({
+            float(row.strike)
+            for row in valid_rows
+        })
+
+        # Each map is keyed by exactly one heatmap cell:
+        #
+        #     (expiry, strike)
+        #
+        # Calls and puts are intentionally kept separate.
+        call_data = {}
+        put_data = {}
+
+        for row in valid_rows:
+            expiry = str(row.expiry)
+            strike = float(row.strike)
+            right = str(row.right).upper()
+            key = (expiry, strike)
+
+            contract_data = {
+                "iv": safe_float(row.implied_vol),
+                "oi": safe_int(row.open_interest),
+                "volume": safe_int(row.volume),
+                "delta": safe_float(row.delta),
+                "gamma": safe_float(row.gamma),
+                "vega": safe_float(row.vega),
+                "theta": safe_float(row.theta),
+                "bid": safe_float(row.bid),
+                "ask": safe_float(row.ask),
+                "last": safe_float(row.last),
+            }
+
+            if right == "C":
+                call_data[key] = contract_data
+            else:
+                put_data[key] = contract_data
+
+        def value(side_data, key, field, default=None):
+            """
+            Get one field from one call/put cell.
+
+            Missing call or put contracts become None for market metrics such
+            as IV, and zero for count-like metrics such as OI and volume.
+            """
+            contract = side_data.get(key)
+
+            if contract is None:
+                return default
+
+            return contract.get(field, default)
+
+        def ratio(numerator, denominator):
+            """
+            Return a ratio only when the denominator is positive.
+
+            Returning None instead of 0 avoids incorrectly implying that a
+            legitimate zero ratio was observed when the denominator was zero.
+            """
+            if numerator is None or denominator is None:
+                return None
+
+            if denominator <= 0:
+                return None
+
+            return numerator / denominator
+
+        # Initialize all matrices with the same dimensions:
+        #
+        #     len(expiries) rows
+        #     len(strikes) columns
+        #
+        call_iv_matrix = []
+        put_iv_matrix = []
+        iv_diff_matrix = []
+        iv_skew_pct_matrix = []
+
+        call_oi_matrix = []
+        put_oi_matrix = []
+        total_oi_matrix = []
+
+        call_vol_matrix = []
+        put_vol_matrix = []
+        total_vol_matrix = []
+
+        call_put_oi_ratio_matrix = []
+        call_put_vol_ratio_matrix = []
+
+        for expiry in expiries:
+            call_iv_row = []
+            put_iv_row = []
+            iv_diff_row = []
+            iv_skew_pct_row = []
+
+            call_oi_row = []
+            put_oi_row = []
+            total_oi_row = []
+
+            call_vol_row = []
+            put_vol_row = []
+            total_vol_row = []
+
+            call_put_oi_ratio_row = []
+            call_put_vol_ratio_row = []
+
+            for strike in strikes:
+                key = (expiry, strike)
+
+                call_iv = value(call_data, key, "iv", default=None)
+                put_iv = value(put_data, key, "iv", default=None)
+
+                call_oi = value(call_data, key, "oi", default=0)
+                put_oi = value(put_data, key, "oi", default=0)
+
+                call_volume = value(call_data, key, "volume", default=0)
+                put_volume = value(put_data, key, "volume", default=0)
+
+                # IV difference is expressed in volatility points.
+                #
+                # Example:
+                #     call IV = 0.31
+                #     put IV  = 0.34
+                #     difference = -0.03
+                #
+                # This means call IV is 3 volatility points below put IV.
+                if call_iv is not None and put_iv is not None:
+                    iv_difference = call_iv - put_iv
+                    iv_skew_pct = (
+                        ((call_iv / put_iv) - 1.0) * 100.0
+                        if put_iv > 0
+                        else None
+                    )
+                else:
+                    iv_difference = None
+                    iv_skew_pct = None
+
+                call_iv_row.append(call_iv)
+                put_iv_row.append(put_iv)
+                iv_diff_row.append(iv_difference)
+                iv_skew_pct_row.append(iv_skew_pct)
+
+                call_oi_row.append(call_oi)
+                put_oi_row.append(put_oi)
+                total_oi_row.append(call_oi + put_oi)
+
+                call_vol_row.append(call_volume)
+                put_vol_row.append(put_volume)
+                total_vol_row.append(call_volume + put_volume)
+
+                call_put_oi_ratio_row.append(
+                    ratio(call_oi, put_oi)
+                )
+                call_put_vol_ratio_row.append(
+                    ratio(call_volume, put_volume)
+                )
+
+            call_iv_matrix.append(call_iv_row)
+            put_iv_matrix.append(put_iv_row)
+            iv_diff_matrix.append(iv_diff_row)
+            iv_skew_pct_matrix.append(iv_skew_pct_row)
+
+            call_oi_matrix.append(call_oi_row)
+            put_oi_matrix.append(put_oi_row)
+            total_oi_matrix.append(total_oi_row)
+
+            call_vol_matrix.append(call_vol_row)
+            put_vol_matrix.append(put_vol_row)
+            total_vol_matrix.append(total_vol_row)
+
+            call_put_oi_ratio_matrix.append(call_put_oi_ratio_row)
+            call_put_vol_ratio_matrix.append(call_put_vol_ratio_row)
 
         return jsonify({
+            "symbol": symbol,
+            "run_date": run_date,
+
             "expiries": expiries,
             "strikes": strikes,
-            "iv_matrix": iv_matrix,
-            "oi_matrix": oi_matrix,
-            "vol_matrix": vol_matrix
+
+            "call_iv_matrix": call_iv_matrix,
+            "put_iv_matrix": put_iv_matrix,
+            "iv_diff_matrix": iv_diff_matrix,
+            "iv_skew_pct_matrix": iv_skew_pct_matrix,
+
+            "call_oi_matrix": call_oi_matrix,
+            "put_oi_matrix": put_oi_matrix,
+            "total_oi_matrix": total_oi_matrix,
+
+            "call_vol_matrix": call_vol_matrix,
+            "put_vol_matrix": put_vol_matrix,
+            "total_vol_matrix": total_vol_matrix,
+
+            "call_put_oi_ratio_matrix": call_put_oi_ratio_matrix,
+            "call_put_vol_ratio_matrix": call_put_vol_ratio_matrix,
         })
+
     finally:
         session.close()
 
@@ -244,7 +480,6 @@ def search():
     if not symbol:
         return redirect(url_for("api.index"))
     return redirect(url_for("api.ticker_view", symbol=symbol))
-
 
 @bp.route("/ticker/<symbol>")
 def ticker_view(symbol):
