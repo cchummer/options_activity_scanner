@@ -1,98 +1,69 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Scan: {{ date_str }}</h2>
+{% set catalyst_col = display_columns['catalyst_flag'] %}
+{% set coiling_col = display_columns['is_coiling'] %}
+{% set call_skew_col = display_columns['call_skew_flag'] %}
+{% set term_col = display_columns['term_structure_flag'] %}
+{% set insider_col = display_columns['insider_conviction'] %}
 
-{% macro render_row(r, columns, date_str) -%}
-<tr onclick="toggleRowHighlight(this)">
-  <td class="sticky-col-1">
-    <div class="link-stack">
-      <a href="/day/{{ date_str }}?symbol={{ r.symbol }}">Chart</a>
-      <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a>
-      <a href="{{ sec_url(r.symbol, '8-K') }}" target="_blank">8-K</a>
-      <a href="{{ sec_url(r.symbol, '10-Q') }}" target="_blank">10-Q</a>
-      <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
-    </div>
-  </td>
-  <td class="sticky-col-2"><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
-  {% for c in columns %}
-    {% if c != 'symbol' %}
-      <td>{{ r[c] }}</td>
-    {% endif %}
-  {% endfor %}
-</tr>
+{% macro flag_badge(value, label) -%}
+  {% if value in [1, '1', True, 'True'] %}
+    <span class="badge good">{{ label }}: Yes</span>
+  {% else %}
+    <span class="badge neutral">{{ label }}: No</span>
+  {% endif %}
 {%- endmacro %}
 
-<style>
-  /* 1. Wrap the table to allow independent horizontal scrolling */
-  .table-container {
-    width: 100%;
-    max-height: 70vh; /* Limits table height so a scrollbar appears when you scroll down */
-    overflow: auto;   /* Enables both horizontal and vertical scrolling */
-  }
-  
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
+{% macro render_compact_rows(rows, compact_columns, date_str) -%}
+  {% for r in rows %}
+    <tr class="signal-row" data-symbol="{{ r.symbol }}">
+      <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
+      {% for c in compact_columns %}
+        {% if c != "symbol" %}
+          <td>{{ r[c] }}</td>
+        {% endif %}
+      {% endfor %}
+      <td>
+        {% if catalyst_col %}{{ flag_badge(r[catalyst_col], "Catalyst") }} {% endif %}
+        {% if coiling_col %}{{ flag_badge(r[coiling_col], "Coiling") }} {% endif %}
+        {% if call_skew_col %}{{ flag_badge(r[call_skew_col], "Call skew") }} {% endif %}
+        {% if term_col %}{{ flag_badge(r[term_col], "Term") }} {% endif %}
+        {% if insider_col and (r[insider_col] or 0) >= 1 %}
+          <span class="badge warn">Insider: High</span>
+        {% elif insider_col and (r[insider_col] or 0) > 0 %}
+          <span class="badge neutral">Insider: Medium</span>
+        {% else %}
+          <span class="badge bad">Insider: Low</span>
+        {% endif %}
+      </td>
+      <td>
+        <a href="/day/{{ date_str }}?symbol={{ r.symbol }}">Chart</a> ·
+        <a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">Ticker</a> ·
+        <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a> ·
+        <a href="{{ sec_url(r.symbol, '8-K') }}" target="_blank">8-K</a> ·
+        <a href="{{ sec_url(r.symbol, '10-Q') }}" target="_blank">10-Q</a> ·
+        <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
+      </td>
+    </tr>
+  {% endfor %}
+{%- endmacro %}
 
-  /* 2. Highlight effect on click */
-  tr.selected-row {
-    background-color: #fff3cd !important; /* Soft warm yellow highlight */
-  }
-  
-  tr:hover {
-    background-color: #f5f5f5; /* Subtle hover effect for easier scanning */
-  }
+<div class="card">
+  <h2 style="margin:0;">Scan date: {{ date_str }}</h2>
+  <p class="muted" style="margin:4px 0 0 0;">Focus on actionable signals first, then expand raw fields when needed.</p>
+</div>
 
-  th, td {
-    border: 1px solid #ddd;
-    padding: 8px;
-    text-align: left;
-  }
-
-  /* 3. Sticky Column & Header Magic */
-  th {
-    position: sticky;
-    top: 0;
-    background-color: #eee;
-    z-index: 4; /* Keeps headers above scrolling body rows */
-  }
-
-  .sticky-col-1 {
-    position: sticky;
-    left: 0;
-    background-color: #fff;
-    z-index: 2;
-  }
-  
-  .sticky-col-2 {
-    position: sticky;
-    left: 50px; /* Adjust this value if your Links column is wider/narrower */
-    background-color: #fff;
-    z-index: 2;
-    font-weight: bold;
-  }
-  
-  /* 4. Intersections: Top-left corner cells must stay pinned both ways */
-  th.sticky-col-1 {
-    z-index: 5;
-    left: 0;
-  }
-  th.sticky-col-2 {
-    z-index: 5;
-    left: 50px;
-  }
-  
-  /* Simple vertical stack for links */
-  .link-stack a {
-    display: block;
-    line-height: 1.4;
-    white-space: nowrap;
-  }
-</style>
+<div class="card">
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <strong>Filter symbols:</strong>
+    <input id="symbol-filter" type="text" placeholder="e.g. AAPL" style="text-transform:uppercase;">
+    <a href="{{ url_for('api.ticker_view', symbol=selected_symbol) }}" class="badge neutral" style="text-decoration:none;">Open ticker detail: {{ selected_symbol }}</a>
+  </div>
+</div>
 
 {% if selected_symbol %}
-<div class="chart">
+<div class="card">
+  <h3 style="margin-top:0;">TradingView</h3>
   <div id="tv-chart"></div>
   <script src="https://s3.tradingview.com/tv.js"></script>
   <script>
@@ -101,79 +72,78 @@
       "symbol": "{{ selected_symbol }}",
       "interval": "D",
       "width": "100%",
-      "height": 400,
+      "height": 380,
       "theme": "light"
     });
   </script>
 </div>
 {% endif %}
 
-<!-- Tier 1 table: highest conviction scores -->
-<div class="table-container">
-  <table>
-    <thead>
-      <tr>
-        <th class="sticky-col-1">Links</th>
-        <th class="sticky-col-2">Symbol</th>
-        {% for c in columns %}
-          {% if c != 'symbol' %}
-            <th>{{ c }}</th>
-          {% endif %}
-        {% endfor %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in tier1_rows %}
-        {{ render_row(r, columns, date_str) }}
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-
-<!-- Tier 2 table: medium conviction scores -->
-<details style="margin-top:10px;">
-  <summary>Show Tier 2 (medium insider conviction scores) — {{ tier2_rows|length }} rows</summary>
-  <div class="table-container" style="margin-top:8px;">
-    <table>
+<div class="card">
+  <h3 style="margin-top:0;">Tier 1 (highest conviction) — {{ tier1_rows|length }}</h3>
+  <div class="table-wrap">
+    <table class="compact-table">
       <thead>
         <tr>
-          <th class="sticky-col-1">Links</th>
-          <th class="sticky-col-2">Symbol</th>
-          {% for c in columns %}
-            {% if c != 'symbol' %}
-              <th>{{ c }}</th>
-            {% endif %}
-          {% endfor %}
+          <th>Symbol</th>
+          {% for c in compact_columns %}{% if c != "symbol" %}<th>{{ c }}</th>{% endif %}{% endfor %}
+          <th>Flags</th>
+          <th>Links</th>
         </tr>
       </thead>
-      <tbody>
-        {% for r in tier2_rows %}
-          {{ render_row(r, columns, date_str) }}
-        {% endfor %}
-      </tbody>
+      <tbody>{{ render_compact_rows(tier1_rows, compact_columns, date_str) }}</tbody>
+    </table>
+  </div>
+</div>
+
+<details class="card">
+  <summary>Show Tier 2 (medium conviction) — {{ tier2_rows|length }}</summary>
+  <div class="table-wrap" style="margin-top:8px;">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          {% for c in compact_columns %}{% if c != "symbol" %}<th>{{ c }}</th>{% endif %}{% endfor %}
+          <th>Flags</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody>{{ render_compact_rows(tier2_rows, compact_columns, date_str) }}</tbody>
     </table>
   </div>
 </details>
 
-<!-- Tier 3 table: lowest conviction scores -->
-<details style="margin-top:10px;">
-  <summary>Show Tier 3 (lowest insider conviction scores) — {{ tier3_rows|length }} rows</summary>
-  <div class="table-container" style="margin-top:8px;">
+<details class="card">
+  <summary>Show Tier 3 (lowest conviction) — {{ tier3_rows|length }}</summary>
+  <div class="table-wrap" style="margin-top:8px;">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          {% for c in compact_columns %}{% if c != "symbol" %}<th>{{ c }}</th>{% endif %}{% endfor %}
+          <th>Flags</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody>{{ render_compact_rows(tier3_rows, compact_columns, date_str) }}</tbody>
+    </table>
+  </div>
+</details>
+
+<details class="card">
+  <summary>Show all fields for all tiers (raw CSV columns)</summary>
+  <div class="table-wrap" style="margin-top:8px;">
     <table>
       <thead>
         <tr>
-          <th class="sticky-col-1">Links</th>
-          <th class="sticky-col-2">Symbol</th>
-          {% for c in columns %}
-            {% if c != 'symbol' %}
-              <th>{{ c }}</th>
-            {% endif %}
-          {% endfor %}
+          {% for c in columns %}<th>{{ c }}</th>{% endfor %}
         </tr>
       </thead>
       <tbody>
-        {% for r in tier3_rows %}
-          {{ render_row(r, columns, date_str) }}
+        {% for group in [tier1_rows, tier2_rows, tier3_rows] %}
+          {% for r in group %}
+            <tr>{% for c in columns %}<td>{{ r[c] }}</td>{% endfor %}</tr>
+          {% endfor %}
         {% endfor %}
       </tbody>
     </table>
@@ -181,9 +151,14 @@
 </details>
 
 <script>
-  // Simple JavaScript function to handle row selection
-  function toggleRowHighlight(row) {
-    row.classList.toggle('selected-row');
+  const filterInput = document.getElementById("symbol-filter");
+  function applySymbolFilter() {
+    const q = (filterInput.value || "").trim().toUpperCase();
+    document.querySelectorAll(".signal-row").forEach((row) => {
+      const symbol = (row.dataset.symbol || "").toUpperCase();
+      row.style.display = !q || symbol.includes(q) ? "" : "none";
+    });
   }
+  filterInput.addEventListener("input", applySymbolFilter);
 </script>
 {% endblock %}

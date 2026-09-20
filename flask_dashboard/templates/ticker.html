@@ -1,41 +1,275 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>{{ symbol }}</h1>
-
-{% if not found %}
-  <p>No appearances of <strong>{{ symbol }}</strong> found in the archive.</p>
-{% else %}
-  <p>{{ rows|length }} appearance(s) found, most recent first.</p>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Scan Date</th>
-        {% for col in columns %}
-          {% if col != 'symbol' %}
-            <th>{{ col }}</th>
-          {% endif %}
+<div class="card">
+  <h2 style="margin:0 0 6px 0;">{{ symbol }} option detail</h2>
+  {% if not found %}
+    <p>No appearances of <strong>{{ symbol }}</strong> found in the archive.</p>
+  {% else %}
+    <p class="muted" style="margin:0;">{{ rows|length }} historical signal rows available.</p>
+    <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+      <label for="run-date-select"><strong>Run date:</strong></label>
+      <select id="run-date-select">
+        {% for row in rows %}
+          <option value="{{ row['scan_date'] }}">{{ row['scan_date'] }}</option>
         {% endfor %}
-        <th>SEC Filings</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in rows %}
-      <tr>
-        <td>
-          <a href="{{ url_for('api.day_view', date_str=row['scan_date'], symbol=symbol) }}">
-            {{ row['scan_date'] }}
-          </a>
-        </td>
-        {% for col in columns %}
-          {% if col != 'symbol' %}
-            <td>{{ row[col] }}</td>
-          {% endif %}
+      </select>
+      <a href="{{ sec_url(symbol) }}" target="_blank">EDGAR</a>
+      <a href="{{ sec_url(symbol, '4') }}" target="_blank">Form 4</a>
+      <a href="{{ sec_url(symbol, '8-K') }}" target="_blank">8-K</a>
+      <a href="{{ sec_url(symbol, '10-Q') }}" target="_blank">10-Q</a>
+      <a href="{{ sec_url(symbol, '10-K') }}" target="_blank">10-K</a>
+    </div>
+  {% endif %}
+</div>
+
+{% if found %}
+<div class="card">
+  <h3 style="margin-top:0;">Selected-date KPI snapshot</h3>
+  <div class="kpi-grid" id="kpi-grid"></div>
+</div>
+
+<div id="matrix-error" class="card" style="display:none;"></div>
+
+<div class="grid-2">
+  <div class="card"><div id="call-iv-heatmap" class="plot"></div></div>
+  <div class="card"><div id="put-iv-heatmap" class="plot"></div></div>
+</div>
+<div class="card">
+  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+    <h3 style="margin:0;">Skew view</h3>
+    <select id="skew-mode">
+      <option value="iv_diff_matrix">Call - Put IV (points)</option>
+      <option value="iv_skew_pct_matrix">Call vs Put IV (%)</option>
+    </select>
+  </div>
+  <div id="skew-heatmap" class="plot"></div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div style="display:flex; gap:8px; align-items:center;">
+      <h3 style="margin:0;">Open interest</h3>
+      <select id="oi-mode">
+        <option value="call_oi_matrix">Call OI</option>
+        <option value="put_oi_matrix">Put OI</option>
+      </select>
+    </div>
+    <div id="oi-heatmap" class="plot"></div>
+  </div>
+  <div class="card">
+    <div style="display:flex; gap:8px; align-items:center;">
+      <h3 style="margin:0;">Volume</h3>
+      <select id="vol-mode">
+        <option value="call_vol_matrix">Call volume</option>
+        <option value="put_vol_matrix">Put volume</option>
+      </select>
+    </div>
+    <div id="vol-heatmap" class="plot"></div>
+  </div>
+</div>
+
+<div class="card">
+  <div style="display:flex; gap:8px; align-items:center;">
+    <h3 style="margin:0;">Call/put ratio</h3>
+    <select id="ratio-mode">
+      <option value="call_put_oi_ratio_matrix">OI ratio (call / put)</option>
+      <option value="call_put_vol_ratio_matrix">Volume ratio (call / put)</option>
+    </select>
+  </div>
+  <div id="ratio-heatmap" class="plot"></div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Top option cells (from selected date)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Metric</th><th>Expiry</th><th>Strike</th><th>Value</th></tr></thead>
+      <tbody id="top-cells-body"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Signal history (compact)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          {% for col in compact_columns %}
+            {% if col != "scan_date" and col != "symbol" %}<th>{{ col }}</th>{% endif %}
+          {% endfor %}
+          <th>Day link</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row["scan_date"] }}</td>
+            {% for col in compact_columns %}
+              {% if col != "scan_date" and col != "symbol" %}<td>{{ row[col] }}</td>{% endif %}
+            {% endfor %}
+            <td><a href="{{ url_for('api.day_view', date_str=row['scan_date'], symbol=symbol) }}">Open day</a></td>
+          </tr>
         {% endfor %}
-        <td><a href="{{ sec_url(symbol) }}" target="_blank">EDGAR</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<details class="card">
+  <summary>Show full historical table</summary>
+  <div class="table-wrap" style="margin-top:8px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Scan Date</th>
+          {% for col in columns %}
+            {% if col != 'symbol' %}<th>{{ col }}</th>{% endif %}
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row['scan_date'] }}</td>
+          {% for col in columns %}
+            {% if col != 'symbol' %}<td>{{ row[col] }}</td>{% endif %}
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+<script>
+  const symbol = "{{ symbol }}";
+  const rows = {{ rows|tojson }};
+  const displayColumns = {{ display_columns|tojson }};
+  const runDateSelect = document.getElementById("run-date-select");
+  const kpiGrid = document.getElementById("kpi-grid");
+  const matrixError = document.getElementById("matrix-error");
+  const topCellsBody = document.getElementById("top-cells-body");
+  const skewMode = document.getElementById("skew-mode");
+  const oiMode = document.getElementById("oi-mode");
+  const volMode = document.getElementById("vol-mode");
+  const ratioMode = document.getElementById("ratio-mode");
+  let latestMatrix = null;
+
+  const kpiConfig = [
+    ["Price", "last_price"],
+    ["IV rank", displayColumns.iv_rank],
+    ["IV percentile", displayColumns.iv_percentile],
+    ["Opt volume expansion", displayColumns.option_volume_expansion],
+    ["ATM OI skew", displayColumns.atm_oi_skew],
+    ["Call skew", displayColumns.call_put_skew],
+    ["Call concentration", displayColumns.call_volume_concentration],
+    ["Insider score", displayColumns.insider_conviction],
+    ["Catalyst flag", displayColumns.catalyst_flag],
+    ["Regime", displayColumns.market_regime],
+  ];
+
+  function formatValue(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3);
+    return String(value);
+  }
+
+  function renderKpis(runDate) {
+    const row = rows.find((r) => r.scan_date === runDate) || {};
+    kpiGrid.innerHTML = kpiConfig.map(([label, key]) => (
+      `<div class="kpi"><span class="label">${label}</span><span class="value">${formatValue(key ? row[key] : null)}</span></div>`
+    )).join("");
+  }
+
+  function renderHeatmap(divId, matrix, title, expiries, strikes, colorscale, zmid = null) {
+    const trace = {
+      type: "heatmap",
+      z: matrix,
+      y: expiries,
+      x: strikes,
+      hoverongaps: false,
+      colorscale: colorscale || "Viridis",
+      zmid: zmid,
+      colorbar: { title: title }
+    };
+    Plotly.newPlot(divId, [trace], {
+      title,
+      margin: { l: 60, r: 20, t: 46, b: 50 },
+      xaxis: { title: "Strike", tickangle: -45 },
+      yaxis: { title: "Expiry" }
+    }, { responsive: true, displaylogo: false });
+  }
+
+  function tableRowsFromMatrix(name, matrix, expiries, strikes, picker, take = 5) {
+    const cells = [];
+    for (let i = 0; i < matrix.length; i += 1) {
+      for (let j = 0; j < matrix[i].length; j += 1) {
+        const value = matrix[i][j];
+        if (value === null || value === undefined) continue;
+        cells.push({ metric: name, expiry: expiries[i], strike: strikes[j], value });
+      }
+    }
+    return cells.sort(picker).slice(0, take);
+  }
+
+  function renderTopCells(data) {
+    const rowsData = [
+      ...tableRowsFromMatrix("Top total OI", data.total_oi_matrix, data.expiries, data.strikes, (a, b) => b.value - a.value),
+      ...tableRowsFromMatrix("Top total volume", data.total_vol_matrix, data.expiries, data.strikes, (a, b) => b.value - a.value),
+      ...tableRowsFromMatrix("Strongest positive IV skew", data.iv_diff_matrix, data.expiries, data.strikes, (a, b) => b.value - a.value, 3),
+      ...tableRowsFromMatrix("Strongest negative IV skew", data.iv_diff_matrix, data.expiries, data.strikes, (a, b) => a.value - b.value, 3)
+    ];
+    if (!rowsData.length) {
+      topCellsBody.innerHTML = '<tr><td colspan="4" class="muted">No option matrix cells available.</td></tr>';
+      return;
+    }
+    topCellsBody.innerHTML = rowsData.map((cell) => (
+      `<tr><td>${cell.metric}</td><td>${cell.expiry}</td><td>${cell.strike}</td><td>${formatValue(cell.value)}</td></tr>`
+    )).join("");
+  }
+
+  function renderMatrixViews(data) {
+    latestMatrix = data;
+    renderHeatmap("call-iv-heatmap", data.call_iv_matrix, "Call IV", data.expiries, data.strikes, "YlGnBu");
+    renderHeatmap("put-iv-heatmap", data.put_iv_matrix, "Put IV", data.expiries, data.strikes, "YlOrRd");
+    renderDynamicHeatmaps();
+    renderTopCells(data);
+  }
+
+  function renderDynamicHeatmaps() {
+    if (!latestMatrix) return;
+    const skewKey = skewMode.value;
+    const skewTitle = skewKey === "iv_skew_pct_matrix" ? "IV skew % (call vs put)" : "IV skew points (call - put)";
+    renderHeatmap("skew-heatmap", latestMatrix[skewKey], skewTitle, latestMatrix.expiries, latestMatrix.strikes, "RdBu", 0);
+    renderHeatmap("oi-heatmap", latestMatrix[oiMode.value], oiMode.options[oiMode.selectedIndex].text, latestMatrix.expiries, latestMatrix.strikes, "Blues");
+    renderHeatmap("vol-heatmap", latestMatrix[volMode.value], volMode.options[volMode.selectedIndex].text, latestMatrix.expiries, latestMatrix.strikes, "Greens");
+    renderHeatmap("ratio-heatmap", latestMatrix[ratioMode.value], ratioMode.options[ratioMode.selectedIndex].text, latestMatrix.expiries, latestMatrix.strikes, "PuOr", 1);
+  }
+
+  async function loadRunDate(runDate) {
+    renderKpis(runDate);
+    matrixError.style.display = "none";
+    try {
+      const response = await fetch(`/api/option_matrix?symbol=${encodeURIComponent(symbol)}&run_date=${encodeURIComponent(runDate)}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Unable to load matrix data");
+      renderMatrixViews(payload);
+    } catch (err) {
+      latestMatrix = null;
+      matrixError.style.display = "block";
+      matrixError.innerHTML = `<strong>Option matrix unavailable for ${runDate}:</strong> ${err.message}`;
+      topCellsBody.innerHTML = '<tr><td colspan="4" class="muted">No option matrix data available.</td></tr>';
+      ["call-iv-heatmap", "put-iv-heatmap", "skew-heatmap", "oi-heatmap", "vol-heatmap", "ratio-heatmap"].forEach((id) => {
+        Plotly.purge(id);
+      });
+    }
+  }
+
+  runDateSelect.addEventListener("change", () => loadRunDate(runDateSelect.value));
+  [skewMode, oiMode, volMode, ratioMode].forEach((el) => el.addEventListener("change", renderDynamicHeatmaps));
+  loadRunDate(runDateSelect.value);
+</script>
 {% endif %}
 {% endblock %}

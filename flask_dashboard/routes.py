@@ -13,6 +13,21 @@ DATA_DIR = Path(os.getenv("SCANNER_DATA_DIR", "/Volumes/1TBT7/dev/options-scanne
 FILE_PREFIX = "convergence_signals_"
 FILE_SUFFIX = ".csv"
 
+DISPLAY_COLUMN_CANDIDATES = {
+    "iv_rank": ["iv_rank_52wk", "iv_rank_13wk"],
+    "iv_percentile": ["iv_pct_52wk", "iv_pct_13wk"],
+    "option_volume_expansion": ["opt_vol_expansion_ratio"],
+    "call_put_skew": ["call_put_iv_skew_pct", "leap_volume_skews"],
+    "call_volume_concentration": ["call_vol_concentration_pct", "deal_band_concentration_pct"],
+    "atm_oi_skew": ["atm_oi_skews", "leap_oi_skews"],
+    "insider_conviction": ["insider_conviction_score"],
+    "catalyst_flag": ["catalyst_flag"],
+    "market_regime": ["market_regime"],
+    "is_coiling": ["is_coiling"],
+    "term_structure_flag": ["term_structure_flag"],
+    "call_skew_flag": ["call_skew_flag"],
+}
+
 def _to_float(value, default=0.0):
     try:
         return float(value)
@@ -100,6 +115,53 @@ def _ticker_history(symbol: str) -> pd.DataFrame:
     if frames:
         return pd.concat(frames, ignore_index=True)
     return pd.DataFrame()
+
+def _first_existing(columns, candidates):
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    return None
+
+def _display_columns(columns):
+    selected = {}
+    for label, candidates in DISPLAY_COLUMN_CANDIDATES.items():
+        selected[label] = _first_existing(columns, candidates)
+    return selected
+
+def _compact_signal_columns(columns):
+    display = _display_columns(columns)
+    compact = []
+    for key in (
+        "last_price",
+        "iv_rank",
+        "iv_percentile",
+        "option_volume_expansion",
+        "call_put_skew",
+        "call_volume_concentration",
+        "atm_oi_skew",
+        "insider_conviction",
+        "catalyst_flag",
+        "market_regime",
+        "is_coiling",
+        "term_structure_flag",
+        "call_skew_flag",
+    ):
+        if key == "last_price" and "last_price" in columns:
+            compact.append("last_price")
+            continue
+        col = display.get(key)
+        if col and col not in compact:
+            compact.append(col)
+    return compact, display
+
+def _validated_days(raw_days, default=14, min_days=1, max_days=180):
+    if raw_days in (None, ""):
+        return default
+    try:
+        days = int(raw_days)
+    except (TypeError, ValueError):
+        return default
+    return min(max(days, min_days), max_days)
 
 #bp.jinja_env.globals["sec_url"] = sec_url
 
@@ -404,6 +466,7 @@ def day_view(date_str):
     df = _load_day(date_str)
     rows = df.to_dict(orient="records")
     columns = list(df.columns)
+    compact_columns, display_columns = _compact_signal_columns(columns)
     selected_symbol = request.args.get("symbol") or (rows[0]["symbol"] if rows else "")
 
     tier1_rows, tier2_rows, tier3_rows = _tier_rows(rows)
@@ -417,6 +480,8 @@ def day_view(date_str):
         tier2_rows=tier2_rows,
         tier3_rows=tier3_rows,
         selected_symbol=selected_symbol,
+        compact_columns=compact_columns,
+        display_columns=display_columns,
     )
 
 def _rolling_frames(days: int) -> pd.DataFrame:
@@ -466,6 +531,12 @@ def rolling_view(days: int):
         industries=industries,
     )
 
+@bp.route("/rolling")
+@bp.route("/rolling/")
+def rolling_query_view():
+    days = _validated_days(request.args.get("days"))
+    return rolling_view(days)
+
 @bp.route("/weekly")
 def weekly():
     return rolling_view(7)
@@ -493,8 +564,15 @@ def ticker_view(symbol):
 
     df = df.sort_values("scan_date", ascending=False)
     columns = [c for c in df.columns if c != "scan_date"]
+    compact_columns, display_columns = _compact_signal_columns(columns)
     rows = df.to_dict(orient="records")
 
     return render_template(
-        "ticker.html", symbol=symbol, rows=rows, columns=columns, found=True
+        "ticker.html",
+        symbol=symbol,
+        rows=rows,
+        columns=columns,
+        compact_columns=compact_columns,
+        display_columns=display_columns,
+        found=True,
     )
