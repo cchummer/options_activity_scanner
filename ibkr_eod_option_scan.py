@@ -41,6 +41,7 @@ import settings as settings
 
 from flask_dashboard.db import SessionLocal, init_db
 from flask_dashboard.models import Signal, OptionTick
+from flask_dashboard.derived_metrics import compute_symbol_day_metrics
 import dateutil.parser
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -203,6 +204,7 @@ class DBUtils:
                     bid = r.get("bid"),
                     ask = r.get("ask"),
                     last = r.get("last"),
+                    underlying_price = r.get("underlying_price"),
                     implied_vol = r.get("implied_vol"),
                     delta = r.get("delta"),
                     gamma=r.get("gamma"),
@@ -236,7 +238,8 @@ class TickerSnapshot:
         'openInterest', 'volume',                       # OPT contract-level
         'pcRatio',  # Put/Call ratio
         'impliedVol',
-        'delta', 'gamma', 'theta', 'vega'
+        'delta', 'gamma', 'theta', 'vega',
+        'underlyingPrice'
     )
 
     def __init__(self, contract: Contract):
@@ -254,6 +257,7 @@ class TickerSnapshot:
         self.gamma           = None
         self.theta           = None
         self.vega            = None
+        self.underlyingPrice = None
 # ══════════════════════════════════════════════════════════════════════════════
 # IBKRApp  —  thin EWrapper / EClient
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2179,7 +2183,12 @@ class ConvergencePipeline:
             db_utils.save_signals_to_db(self.feature_store)
         except Exception as e:
             logging.error(f"Failed to save signals to database: {e}")
-        
+
+        # Compute and save derived metrics for each symbol-day combination
+        for row in self.feature_store:
+            metrics = compute_symbol_day_metrics(row['symbol'], row['timestamp'], save=True)
+            logging.info(f"Computed and saved derived metrics for {row['symbol']} on {row['timestamp']}: {metrics}")
+
         self.export_to_feature_store()
 
     # ── Weekend / test build (was async) ─────────────────────────────────────

@@ -87,6 +87,7 @@ class OptionTick(Base):
     bid = Column(Float)
     ask = Column(Float)
     last = Column(Float)
+    underlying_price = Column(Float)
     implied_vol = Column(Float)
     delta = Column(Float)
     gamma = Column(Float)
@@ -99,3 +100,72 @@ class OptionTick(Base):
     src = Column(Text)
     raw = Column(JSON)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class SymbolDayMetric(Base):
+    __tablename__ = "symbol_day_metrics"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(Text, nullable=False, index=True)
+    run_date = Column(Date, nullable=False, index=True)
+
+    # Price / meta
+    last_price = Column(Float)
+    prev_close = Column(Float)
+    pct_change = Column(Float)
+    market_regime = Column(Text)
+    is_coiling = Column(Integer)
+
+    # Insider / context
+    insider_conviction_score = Column(Float)
+    catalyst_flag = Column(Integer)
+    catalyst_type = Column(Text)
+    catalyst_confidence = Column(Float)
+
+    # Option aggregates (phase-1)
+    total_call_volume = Column(BigInteger)
+    total_put_volume = Column(BigInteger)
+    total_option_volume = Column(BigInteger)
+    call_volume_share = Column(Float)
+
+    total_call_oi = Column(BigInteger)
+    total_put_oi = Column(BigInteger)
+    total_oi = Column(BigInteger)
+    call_put_oi_ratio = Column(Float)
+
+    # Concentration / focus
+    top_call_line_volume = Column(BigInteger)
+    top_call_line_share = Column(Float)
+    top_3_call_concentration_pct = Column(Float)
+    dominant_expiry_by_call_vol = Column(Text)
+
+    # IV / greeks aggregates
+    avg_call_iv = Column(Float)
+    avg_put_iv = Column(Float)
+    call_put_iv_diff = Column(Float)
+    call_delta_weighted_volume = Column(Float)
+
+    # Deal band / wing measures
+    deal_band_call_volume = Column(BigInteger)
+    deal_band_call_share = Column(Float)
+
+    # Day-over-day deltas (today - prev)
+    call_volume_change = Column(BigInteger)
+    call_oi_change = Column(BigInteger)
+    put_volume_change = Column(BigInteger)
+    put_oi_change = Column(BigInteger)
+
+    # persistence / flags
+    consecutive_days_call_build = Column(Integer)
+    call_build_flag = Column(Integer)
+
+    # operational / diagnostics
+    rows_ingested = Column(Integer)
+    raw = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # optionally you can add a uniqueness constraint for symbol/run_date
+        # UniqueConstraint('symbol', 'run_date', name='uq_symbol_run_date'),
+        {},
+    )

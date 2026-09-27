@@ -336,9 +336,9 @@ class MasterParserClass:
         elif filer_match:
             remaining_text = header_text[filer_match.end():]  # Extract text after 'filer:'
         elif issuer_match:
-            remaining_text = header_text[issuer_match.end():]
+            remaining_text = header_text[issuer_match.end():] # Try 'issuer:'
         else:
-            remaining_text = header_text  # Fallback in case neither section is present
+            remaining_text = header_text  # Fallback in case none are present
         
         # Some company data patterns
         company_data_patterns = {
