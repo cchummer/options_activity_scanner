@@ -6,6 +6,61 @@
     <p>No appearances of <strong>{{ symbol }}</strong> found in the archive.</p>
   {% else %}
     <p class="muted" style="margin:0;">{{ rows|length }} historical signal rows available.</p>
+    
+    <!-- KPI panel for selected run date (latest_metric passed in from routes.py) -->
+    <div style="display:flex; gap:12px; align-items:center; margin-bottom:12px;">
+      <div style="padding:10px; border-radius:8px; background:#f8f9fa;">
+        <div style="font-size:13px; color:#666">Selected run</div>
+        <div style="font-weight:600; font-size:18px;">{{ rows[0]['scan_date'] }}</div>
+      </div>
+
+      {% if latest_metric %}
+        <div style="padding:10px; border-radius:8px; background:#fff; border:1px solid #eee;">
+          <div style="font-size:12px; color:#666">Last Price</div>
+          <div style="font-weight:600; font-size:18px;">{{ latest_metric.last_price or latest_metric.get('last_price') }}</div>
+        </div>
+
+        <div style="padding:10px; border-radius:8px; background:#fff; border:1px solid #eee;">
+          <div style="font-size:12px; color:#666">Call Vol Share</div>
+          <div style="font-weight:600; font-size:18px;">
+            {% if latest_metric.call_volume_share is defined and latest_metric.call_volume_share is not none %}
+              {{ (latest_metric.call_volume_share * 100)|round(1) }}%
+            {% elif latest_metric.get('call_volume_share') %}
+              {{ (latest_metric.get('call_volume_share') * 100)|round(1) }}%
+            {% else %}
+              n/a
+            {% endif %}
+          </div>
+        </div>
+
+        <div style="padding:10px; border-radius:8px; background:#fff; border:1px solid #eee;">
+          <div style="font-size:12px; color:#666">Call OI</div>
+          <div style="font-weight:600; font-size:18px;">
+            {{ latest_metric.total_call_oi or latest_metric.get('total_call_oi') or '—' }}
+          </div>
+        </div>
+
+        <div style="padding:10px; border-radius:8px; background:#fff; border:1px solid #eee;">
+          <div style="font-size:12px; color:#666">Avg Call IV</div>
+          <div style="font-weight:600; font-size:18px;">
+            {{ latest_metric.avg_call_iv or latest_metric.get('avg_call_iv') or '—' }}
+          </div>
+        </div>
+
+        <div style="padding:10px; border-radius:8px; background:#fff; border:1px solid #eee;">
+          <div style="font-size:12px; color:#666">Insider</div>
+          <div style="font-weight:600; font-size:18px;">
+            {{ latest_metric.insider_conviction_score or latest_metric.get('insider_conviction_score') or '—' }}
+          </div>
+        </div>
+
+      {% else %}
+        <div style="padding:10px; border-radius:8px; background:#fff; border:1px solid #eee;">
+          <div class="small-muted">No derived metrics available for the latest run</div>
+        </div>
+      {% endif %}
+    </div>
+    
     <div style="margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
       <label for="run-date-select"><strong>Run date:</strong></label>
       <select id="run-date-select">

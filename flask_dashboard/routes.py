@@ -1,6 +1,6 @@
 from flask import Blueprint, render_template, request, abort, redirect, url_for, jsonify
 from .db import SessionLocal
-from .models import Signal, OptionTick
+from .models import Signal, OptionTick, SymbolDayMetric
 from sqlalchemy import func
 from pathlib import Path
 from datetime import datetime
@@ -26,6 +26,12 @@ DISPLAY_COLUMN_CANDIDATES = {
     "is_coiling": ["is_coiling"],
     "term_structure_flag": ["term_structure_flag"],
     "call_skew_flag": ["call_skew_flag"],
+    "call_volume_share": ["call_volume_share"],
+    "call_build_flag": ["call_build_flag"],
+    "consecutive_days_call_build": ["consecutive_days_call_build"],
+    "insider_conviction_score": ["insider_conviction_score"],
+    "total_call_volume": ["total_call_volume"],
+    "total_call_oi": ["total_call_oi"],
 }
 
 def _to_float(value, default=0.0):
@@ -145,6 +151,12 @@ def _compact_signal_columns(columns):
         "is_coiling",
         "term_structure_flag",
         "call_skew_flag",
+        "call_volume_share",
+        "call_build_flag",
+        "consecutive_days_call_build",
+        "insider_conviction_score",
+        "total_call_volume",
+        "total_call_oi",
     ):
         if key == "last_price" and "last_price" in columns:
             compact.append("last_price")
@@ -461,27 +473,96 @@ def index():
     dates = list(_date_map().keys())
     return render_template("index.html", dates=dates)
 
+# --- helper: fetch symbol_day_metrics for a run_date into a dict keyed by symbol ---
+def get_metrics_map_for_date(run_date: str) -> dict:
+    """
+    Returns a dict mapping symbol -> metrics dict for the given run_date.
+    Uses the SymbolDayMetric table and returns the stored .raw JSON if available,
+    otherwise converts the model fields into a minimal dict.
+    """
+    session = SessionLocal()
+    try:
+        rows = (
+            session.query(SymbolDayMetric)
+            .filter(SymbolDayMetric.run_date == run_date)
+            .all()
+        )
+        out = {}
+        for r in rows:
+            # prefer the persisted raw JSON for full traceability
+            if isinstance(r.raw, dict) and r.raw:
+                out[r.symbol] = r.raw
+            else:
+                out[r.symbol] = {
+                    "symbol": r.symbol,
+                    "run_date": str(r.run_date),
+                    "last_price": r.last_price,
+                    "total_call_volume": r.total_call_volume,
+                    "total_put_volume": r.total_put_volume,
+                    "call_volume_share": r.call_volume_share,
+                    "total_call_oi": r.total_call_oi,
+                    "total_put_oi": r.total_put_oi,
+                    "call_put_oi_ratio": r.call_put_oi_ratio,
+                    "top_call_line_volume": r.top_call_line_volume,
+                    "top_call_line_share": r.top_call_line_share,
+                    "top_3_call_concentration_pct": r.top_3_call_concentration_pct,
+                    "avg_call_iv": r.avg_call_iv,
+                    "avg_put_iv": r.avg_put_iv,
+                    "call_put_iv_diff": r.call_put_iv_diff,
+                    "consecutive_days_call_build": r.consecutive_days_call_build,
+                    "call_build_flag": r.call_build_flag,
+                    "insider_conviction_score": r.insider_conviction_score,
+                    "market_regime": r.market_regime,
+                    "is_coiling": r.is_coiling,
+                }
+        return out
+    finally:
+        session.close()
+
+# --- Day view: merge CSV rows with symbol_day_metrics for the given date ---
 @bp.route("/day/<date_str>")
 def day_view(date_str):
     df = _load_day(date_str)
-    rows = df.to_dict(orient="records")
+    csv_rows = df.to_dict(orient="records")
     columns = list(df.columns)
-    compact_columns, display_columns = _compact_signal_columns(columns)
-    selected_symbol = request.args.get("symbol") or (rows[0]["symbol"] if rows else "")
 
-    tier1_rows, tier2_rows, tier3_rows = _tier_rows(rows)
+    # fetch metrics for the date and merge into each row under 'metrics' key
+    metrics_map = get_metrics_map_for_date(date_str)
+
+    # Merge: augment CSV row dicts with keys from metrics_map if available
+    extended_rows = []
+    for r in csv_rows:
+        symbol = (r.get("symbol") or "").upper()
+        m = metrics_map.get(symbol)
+        # merge metric fields into top-level keys for easy templating (do not overwrite existing CSV keys)
+        merged = r.copy()
+        merged["metrics"] = m or {}
+        # convenience: expose some metric keys at top-level for table rendering
+        merged["call_volume_share"] = (m.get("call_volume_share") if m else None)
+        merged["call_build_flag"] = (m.get("call_build_flag") if m else None)
+        merged["consecutive_days_call_build"] = (m.get("consecutive_days_call_build") if m else None)
+        merged["insider_conviction_score"] = (m.get("insider_conviction_score") if m else None)
+        merged["total_call_volume"] = (m.get("total_call_volume") if m else None)
+        merged["total_call_oi"] = (m.get("total_call_oi") if m else None)
+
+        extended_rows.append(merged)
+
+    selected_symbol = request.args.get("symbol") or (extended_rows[0]["symbol"] if extended_rows else "")
+
+    tier1_rows, tier2_rows, tier3_rows = _tier_rows(extended_rows)
+    compact_columns, display_columns = _compact_signal_columns(extended_rows) # TODO
 
     return render_template(
         "day.html",
         date_str=date_str,
         columns=columns,
-        rows=rows,  # keep for backward compatibility if needed
+        rows=extended_rows,  # now CSV rows augmented with 'metrics'
         tier1_rows=tier1_rows,
         tier2_rows=tier2_rows,
         tier3_rows=tier3_rows,
         selected_symbol=selected_symbol,
         compact_columns=compact_columns,
-        display_columns=display_columns,
+        display_columns=display_columns
     )
 
 def _rolling_frames(days: int) -> pd.DataFrame:
@@ -576,3 +657,73 @@ def ticker_view(symbol):
         display_columns=display_columns,
         found=True,
     )
+
+# --- Ticker view: include symbol_day_metrics with each historical row and expose latest metric to template ---
+@bp.route("/ticker/<symbol>")
+def ticker_view(symbol):
+    symbol = symbol.upper()
+    df = _ticker_history(symbol)
+
+    if df.empty:
+        return render_template(
+            "ticker.html", symbol=symbol, rows=[], columns=[], found=False
+        )
+
+    df = df.sort_values("scan_date", ascending=False)
+    columns = [c for c in df.columns if c != "scan_date"]
+    rows = df.to_dict(orient="records")
+
+    # Fetch persisted SymbolDayMetric rows for this symbol for efficient mapping
+    session = SessionLocal()
+    try:
+        metrics_rows = (
+            session.query(SymbolDayMetric)
+            .filter(SymbolDayMetric.symbol == symbol)
+            .order_by(SymbolDayMetric.run_date.desc())
+            .all()
+        )
+        metrics_map = {str(r.run_date): (r.raw if isinstance(r.raw, dict) and r.raw else {
+            "symbol": r.symbol,
+            "run_date": str(r.run_date),
+            "last_price": r.last_price,
+            "total_call_volume": r.total_call_volume,
+            "total_put_volume": r.total_put_volume,
+            "call_volume_share": r.call_volume_share,
+            "total_call_oi": r.total_call_oi,
+            "total_put_oi": r.total_put_oi,
+            "call_put_iv_diff": r.call_put_iv_diff,
+            "consecutive_days_call_build": r.consecutive_days_call_build,
+            "call_build_flag": r.call_build_flag,
+            "insider_conviction_score": r.insider_conviction_score,
+            "market_regime": r.market_regime,
+            "is_coiling": r.is_coiling,
+        }) for r in metrics_rows}
+    finally:
+        session.close()
+
+    # Attach metrics for each historical row (by scan_date)
+    extended_rows = []
+    for r in rows:
+        scan_date = r.get("scan_date")
+        m = metrics_map.get(scan_date)
+        r_copy = r.copy()
+        r_copy["metrics"] = m or {}
+        extended_rows.append(r_copy)
+
+    # select the most recent metric (if available)
+    latest_metric = None
+    if extended_rows:
+        latest_metric = extended_rows[0].get("metrics") or None
+
+    return render_template(
+        "ticker.html", symbol=symbol, rows=extended_rows, columns=columns, found=True, latest_metric=latest_metric
+    )
+
+@bp.route("/api/metrics/latest")
+def api_metrics_latest():
+    run_date = request.args.get("run_date")
+    if not run_date:
+        return jsonify({"error": "run_date required"}), 400
+    metrics = get_metrics_map_for_date(run_date)
+    # return list of metrics dict
+    return jsonify(list(metrics.values()))
