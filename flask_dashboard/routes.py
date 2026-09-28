@@ -633,30 +633,6 @@ def search():
         return redirect(url_for("api.index"))
     return redirect(url_for("api.ticker_view", symbol=symbol))
 
-@bp.route("/ticker/<symbol>")
-def ticker_view(symbol):
-    symbol = symbol.upper()
-    df = _ticker_history(symbol)
-
-    if df.empty:
-        return render_template(
-            "ticker.html", symbol=symbol, rows=[], columns=[], found=False
-        )
-
-    df = df.sort_values("scan_date", ascending=False)
-    columns = [c for c in df.columns if c != "scan_date"]
-    compact_columns, display_columns = _compact_signal_columns(columns)
-    rows = df.to_dict(orient="records")
-
-    return render_template(
-        "ticker.html",
-        symbol=symbol,
-        rows=rows,
-        columns=columns,
-        compact_columns=compact_columns,
-        display_columns=display_columns,
-        found=True,
-    )
 
 # --- Ticker view: include symbol_day_metrics with each historical row and expose latest metric to template ---
 @bp.route("/ticker/<symbol>")
@@ -714,9 +690,11 @@ def ticker_view(symbol):
     latest_metric = None
     if extended_rows:
         latest_metric = extended_rows[0].get("metrics") or None
-
+    
+    compact_columns, display_columns = _compact_signal_columns(extended_rows) # TODO
+    
     return render_template(
-        "ticker.html", symbol=symbol, rows=extended_rows, columns=columns, found=True, latest_metric=latest_metric
+        "ticker.html", symbol=symbol, rows=extended_rows, columns=columns, found=True, latest_metric=latest_metric, compact_columns=compact_columns, display_columns=display_columns
     )
 
 @bp.route("/api/metrics/latest")
