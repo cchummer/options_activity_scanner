@@ -171,6 +171,32 @@ class DBUtils:
                     atm_dominant_expiry_by_oi=r.get("atm_dominant_expiry_by_oi"),
                     atm_oi_depth=r.get("atm_oi_depth"),
                     atm_oi_skews=r.get("atm_oi_skews"),
+                    otm_call_iv_max_skew_expiry=r.get("otm_call_iv_max_skew_expiry"),
+                    otm_call_iv=r.get("otm_call_iv"),
+                    otm_put_iv=r.get("otm_put_iv"),
+                    call_put_iv_skew_pct=r.get("call_put_iv_skew_pct"),
+                    call_put_iv_skew_pct_avg=r.get("call_put_iv_skew_pct_avg"),
+                    call_skew_flag=r.get("call_skew_flag"),
+                    iv_skew_expiries_matched=r.get("iv_skew_expiries_matched"),
+                    call_vol_concentration_pct=r.get("call_vol_concentration_pct"),
+                    concentration_expiry=r.get("concentration_expiry"),
+                    concentration_strike=r.get("concentration_strike"),
+                    term_structure_anomaly_expiry=r.get("term_structure_anomaly_expiry"),
+                    term_structure_anomaly_pct=r.get("term_structure_anomaly_pct"),
+                    term_structure_flag=r.get("term_structure_flag"),
+                    deal_band_call_vol=r.get("deal_band_call_vol"),
+                    deal_band_call_oi=r.get("deal_band_call_oi"),
+                    deal_band_vol_oi_ratio=r.get("deal_band_vol_oi_ratio"),
+                    deal_band_concentration_pct=r.get("deal_band_concentration_pct"),
+                    deal_band_dominant_expiry=r.get("deal_band_dominant_expiry"),
+                    deal_band_dominant_strike=r.get("deal_band_dominant_strike"),
+                    insider_conviction_score=r.get("insider_conviction_score"),
+                    cfo_involved=int(r.get("cfo_involved", 0)),
+                    debt_reduction_pct=r.get("debt_reduction_pct"),
+                    catalyst_flag=int(r.get("catalyst_flag", 0)),
+                    catalyst_type=r.get("catalyst_type"),
+                    catalyst_confidence=r.get("catalyst_confidence"),
+                    has_activist_pressure=int(r.get("has_activist_pressure", 0)),
                     raw=safe_raw,
                 )
                 objs.append(s)
@@ -2187,7 +2213,7 @@ class ConvergencePipeline:
         # Compute and save derived metrics for each symbol-day combination
         for row in self.feature_store:
             metrics = compute_symbol_day_metrics(row['symbol'], row['timestamp'], save=True)
-            logging.info(f"Computed and saved derived metrics for {row['symbol']} on {row['timestamp']}: {metrics}")
+            logging.info(f"Computed and saved derived metrics for {row['symbol']} on {row['timestamp']}")
 
         self.export_to_feature_store()
 

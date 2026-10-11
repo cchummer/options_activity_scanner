@@ -54,6 +54,36 @@
 </div>
 
 <div class="card">
+  <h3 style="margin-top:0;">Filter this scan</h3>
+
+  <form method="get" class="search-form">
+    <input type="text" name="symbol" value="{{ selected_symbol or '' }}" placeholder="Symbol filter">
+    <select name="market_regime">
+      <option value="">Any regime</option>
+      <option value="Bullish">Bullish</option>
+      <option value="Neutral">Neutral</option>
+      <option value="Bearish">Bearish</option>
+    </select>
+
+    <select name="min_insider">
+      <option value="">Insider min</option>
+      <option value="0">0</option>
+      <option value="0.5">0.5</option>
+      <option value="1">1.0</option>
+      <option value="2">2.0</option>
+    </select>
+
+    <select name="call_build_flag">
+      <option value="">Build flag</option>
+      <option value="1">Call build yes</option>
+      <option value="0">No build</option>
+    </select>
+
+    <button type="submit">Filter</button>
+  </form>
+</div>
+
+<div class="card">
   <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
     <strong>Filter symbols:</strong>
     <input id="symbol-filter" type="text" placeholder="e.g. AAPL" style="text-transform:uppercase;">

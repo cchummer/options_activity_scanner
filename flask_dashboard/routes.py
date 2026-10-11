@@ -1,4 +1,5 @@
 from flask import Blueprint, render_template, request, abort, redirect, url_for, jsonify
+from .query_helpers import get_symbol_metrics_range, apply_metric_filters, compute_trend_metrics, get_symbol_recurrences
 from .db import SessionLocal
 from .models import Signal, OptionTick, SymbolDayMetric
 from sqlalchemy import func
@@ -519,6 +520,41 @@ def get_metrics_map_for_date(run_date: str) -> dict:
     finally:
         session.close()
 
+def _filter_day_rows(rows, args):
+    symbol = (args.get("symbol") or "").strip().upper()
+    market_regime = (args.get("market_regime") or "").strip()
+    min_insider = args.get("min_insider")
+    call_build_flag = args.get("call_build_flag")
+
+    out = []
+    for r in rows:
+        if symbol and (r.get("symbol") or "").upper() != symbol:
+            continue
+
+        if market_regime:
+            mr = (r.get("market_regime") or "")
+            if mr != market_regime:
+                continue
+
+        if min_insider:
+            try:
+                score = float(r.get("insider_conviction_score") or 0)
+                if score < float(min_insider):
+                    continue
+            except Exception:
+                continue
+
+        if call_build_flag == "1":
+            if r.get("call_build_flag") not in [1, "1", True]:
+                continue
+        elif call_build_flag == "0":
+            if r.get("call_build_flag") in [1, "1", True]:
+                continue
+
+        out.append(r)
+
+    return out
+
 # --- Day view: merge CSV rows with symbol_day_metrics for the given date ---
 @bp.route("/day/<date_str>")
 def day_view(date_str):
@@ -549,7 +585,9 @@ def day_view(date_str):
 
     selected_symbol = request.args.get("symbol") or (extended_rows[0]["symbol"] if extended_rows else "")
 
-    tier1_rows, tier2_rows, tier3_rows = _tier_rows(extended_rows)
+    filtered_rows = _filter_day_rows(extended_rows, request.args)
+    tier1_rows, tier2_rows, tier3_rows = _tier_rows(filtered_rows)
+   
     compact_columns, display_columns = _compact_signal_columns(extended_rows) # TODO
 
     return render_template(
@@ -634,67 +672,54 @@ def search():
     return redirect(url_for("api.ticker_view", symbol=symbol))
 
 
-# --- Ticker view: include symbol_day_metrics with each historical row and expose latest metric to template ---
 @bp.route("/ticker/<symbol>")
 def ticker_view(symbol):
     symbol = symbol.upper()
-    df = _ticker_history(symbol)
 
-    if df.empty:
+    date_from = request.args.get("date_from") or ""
+    date_to = request.args.get("date_to") or ""
+
+    metrics_rows = get_symbol_metrics_range(symbol, date_from=date_from, date_to=date_to)
+
+    if not metrics_rows:
         return render_template(
-            "ticker.html", symbol=symbol, rows=[], columns=[], found=False
+            "ticker.html",
+            symbol=symbol,
+            rows=[],
+            found=False,
+            date_from=date_from,
+            date_to=date_to,
+            latest_metric=None,
+            recurrence_summary={},
+            chart_points=[],
         )
 
-    df = df.sort_values("scan_date", ascending=False)
-    columns = [c for c in df.columns if c != "scan_date"]
-    rows = df.to_dict(orient="records")
+    metrics_rows = sorted(metrics_rows, key=lambda r: r.get("run_date", ""))
+    latest_metric = metrics_rows[-1]
 
-    # Fetch persisted SymbolDayMetric rows for this symbol for efficient mapping
-    session = SessionLocal()
-    try:
-        metrics_rows = (
-            session.query(SymbolDayMetric)
-            .filter(SymbolDayMetric.symbol == symbol)
-            .order_by(SymbolDayMetric.run_date.desc())
-            .all()
-        )
-        metrics_map = {str(r.run_date): (r.raw if isinstance(r.raw, dict) and r.raw else {
-            "symbol": r.symbol,
-            "run_date": str(r.run_date),
-            "last_price": r.last_price,
-            "total_call_volume": r.total_call_volume,
-            "total_put_volume": r.total_put_volume,
-            "call_volume_share": r.call_volume_share,
-            "total_call_oi": r.total_call_oi,
-            "total_put_oi": r.total_put_oi,
-            "call_put_iv_diff": r.call_put_iv_diff,
-            "consecutive_days_call_build": r.consecutive_days_call_build,
-            "call_build_flag": r.call_build_flag,
-            "insider_conviction_score": r.insider_conviction_score,
-            "market_regime": r.market_regime,
-            "is_coiling": r.is_coiling,
-        }) for r in metrics_rows}
-    finally:
-        session.close()
+    # trend summary
+    trend = compute_trend_metrics(metrics_rows)
 
-    # Attach metrics for each historical row (by scan_date)
-    extended_rows = []
-    for r in rows:
-        scan_date = r.get("scan_date")
-        m = metrics_map.get(scan_date)
-        r_copy = r.copy()
-        r_copy["metrics"] = m or {}
-        extended_rows.append(r_copy)
+    # convert to chart points
+    chart_points = [{
+        "date": r.get("run_date"),
+        "call_oi": r.get("total_call_oi"),
+        "call_vol_share": r.get("call_volume_share"),
+        "insider": r.get("insider_conviction_score"),
+        "avg_call_iv": r.get("avg_call_iv"),
+        "call_build_flag": r.get("call_build_flag"),
+    } for r in metrics_rows]
 
-    # select the most recent metric (if available)
-    latest_metric = None
-    if extended_rows:
-        latest_metric = extended_rows[0].get("metrics") or None
-    
-    compact_columns, display_columns = _compact_signal_columns(extended_rows) # TODO
-    
     return render_template(
-        "ticker.html", symbol=symbol, rows=extended_rows, columns=columns, found=True, latest_metric=latest_metric, compact_columns=compact_columns, display_columns=display_columns
+        "ticker.html",
+        symbol=symbol,
+        rows=metrics_rows,
+        found=True,
+        latest_metric=latest_metric,
+        date_from=date_from,
+        date_to=date_to,
+        recurrence_summary=trend,
+        chart_points=chart_points,
     )
 
 @bp.route("/api/metrics/latest")
@@ -705,3 +730,54 @@ def api_metrics_latest():
     metrics = get_metrics_map_for_date(run_date)
     # return list of metrics dict
     return jsonify(list(metrics.values()))
+
+@bp.route("/recurrences")
+def recurrences():
+    date_from = request.args.get("date_from") or ""
+    date_to = request.args.get("date_to") or ""
+    min_occurrences = request.args.get("min_occurrences", "2")
+
+    try:
+        min_occurrences = max(1, int(min_occurrences))
+    except ValueError:
+        min_occurrences = 2
+
+    # parse filter fields
+    filters = {
+        "min_call_volume_share": request.args.get("min_call_volume_share") or None,
+        "max_call_volume_share": request.args.get("max_call_volume_share") or None,
+        "min_insider_conviction": request.args.get("min_insider_conviction") or None,
+        "max_insider_conviction": request.args.get("max_insider_conviction") or None,
+        "min_consecutive_call_build": request.args.get("min_consecutive_call_build") or None,
+        "has_call_build_flag": request.args.get("has_call_build_flag") == "on",
+        "has_catalyst": request.args.get("has_catalyst") == "on",
+        "market_regimes": request.args.getlist("market_regime"),
+        "min_call_oi": request.args.get("min_call_oi") or None,
+        "max_call_oi": request.args.get("max_call_oi") or None,
+        "min_call_iv": request.args.get("min_call_iv") or None,
+        "max_call_iv": request.args.get("max_call_iv") or None,
+    }
+
+    matches = get_symbol_recurrences(date_from=date_from, date_to=date_to, min_occurrences=min_occurrences)
+
+    filtered = []
+    for item in matches:
+        row_metrics = apply_metric_filters(item["raw_metrics"], filters)
+        if not row_metrics:
+            continue
+        filtered.append({
+            "symbol": item["symbol"],
+            "occurrences": len(row_metrics),
+            "dates": [r.get("run_date") for r in row_metrics],
+            "trends": compute_trend_metrics(row_metrics),
+            "raw_metrics": row_metrics,
+        })
+
+    return render_template(
+        "recurrences.html",
+        date_from=date_from,
+        date_to=date_to,
+        min_occurrences=min_occurrences,
+        rows=filtered,
+        filters=filters,
+    )
