@@ -2,7 +2,6 @@ from flask import Blueprint, render_template, request, abort, redirect, url_for,
 from .query_helpers import get_symbol_metrics_range, apply_metric_filters, compute_trend_metrics, get_symbol_recurrences
 from .db import SessionLocal
 from .models import Signal, OptionTick, SymbolDayMetric
-from sqlalchemy import func
 from pathlib import Path
 from datetime import datetime
 import os
@@ -14,62 +13,16 @@ DATA_DIR = Path(os.getenv("SCANNER_DATA_DIR", "/Volumes/1TBT7/dev/options-scanne
 FILE_PREFIX = "convergence_signals_"
 FILE_SUFFIX = ".csv"
 
-DISPLAY_COLUMN_CANDIDATES = {
-    "iv_rank": ["iv_rank_52wk", "iv_rank_13wk"],
-    "iv_percentile": ["iv_pct_52wk", "iv_pct_13wk"],
-    "option_volume_expansion": ["opt_vol_expansion_ratio"],
-    "call_put_skew": ["call_put_iv_skew_pct", "leap_volume_skews"],
-    "call_volume_concentration": ["call_vol_concentration_pct", "deal_band_concentration_pct"],
-    "atm_oi_skew": ["atm_oi_skews", "leap_oi_skews"],
-    "insider_conviction": ["insider_conviction_score"],
-    "catalyst_flag": ["catalyst_flag"],
-    "market_regime": ["market_regime"],
-    "is_coiling": ["is_coiling"],
-    "term_structure_flag": ["term_structure_flag"],
-    "call_skew_flag": ["call_skew_flag"],
-    "call_volume_share": ["call_volume_share"],
-    "call_build_flag": ["call_build_flag"],
-    "consecutive_days_call_build": ["consecutive_days_call_build"],
-    "insider_conviction_score": ["insider_conviction_score"],
-    "total_call_volume": ["total_call_volume"],
-    "total_call_oi": ["total_call_oi"],
-}
+# --- Utility: SEC URL formatter ---
+@bp.add_app_template_global
+def sec_url(symbol: str, form: str | None = None) -> str:
+    base = "https://www.sec.gov/cgi-bin/browse-edgar"
+    query = f"action=getcompany&CIK={symbol}&owner=include&count=40"
+    if form:
+        query += f"&type={form}"
+    return f"{base}?{query}"
 
-def _to_float(value, default=0.0):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-# Tier result rows, currently based on insider_conviction_score. TODO: Implement more sophisticated scoring in the future.
-def _tier_rows(rows):
-    """
-    3-tier prioritization by insider_conviction_score:
-      Tier 1 (highest): score >= 1
-      Tier 2 (medium): score > 0
-      Tier 3 (lowest):  score == 0 OR missing/unparseable
-    """
-    tier1, tier2, tier3 = [], [], []
-
-    for r in rows:
-        # Missing or non-numeric goes to tier3 by default
-        score = _to_float(r.get("insider_conviction_score"), default=-999999)
-
-        if score >= 1:
-            tier1.append(r)
-        elif score > 0:
-            tier2.append(r)
-        else:
-            tier3.append(r)
-
-    # Sort each tier descending by score
-    key_fn = lambda row: _to_float(row.get("insider_conviction_score"), default=-999999)
-    tier1.sort(key=key_fn, reverse=True)
-    tier2.sort(key=key_fn, reverse=True)
-    tier3.sort(key=key_fn, reverse=True)
-
-    return tier1, tier2, tier3
-
+# --- CSV helpers (for /day view only) ---
 def _date_from_filename(path: Path) -> str | None:
     name = path.stem
     if not name.startswith(FILE_PREFIX):
@@ -98,189 +51,140 @@ def _load_day(date_str: str) -> pd.DataFrame:
         df["timestamp"] = date_str
     return df
 
-@bp.add_app_template_global
-def sec_url(symbol: str, form: str | None = None) -> str:
-    base = "https://www.sec.gov/cgi-bin/browse-edgar"
-    query = f"action=getcompany&CIK={symbol}&owner=include&count=40"
-    if form:
-        query += f"&type={form}"
-    return f"{base}?{query}"
-
-def _ticker_history(symbol: str) -> pd.DataFrame:
-    symbol = symbol.upper()
-    date_map = _date_map()
-    frames = []
-    for date_str, path in date_map.items():
-        df = pd.read_csv(path)
-        if "symbol" not in df.columns:
-            continue
-        match = df[df["symbol"].astype(str).str.upper() == symbol]
-        if not match.empty:
-            match = match.copy()
-            match["scan_date"] = date_str
-            frames.append(match)
-    if frames:
-        return pd.concat(frames, ignore_index=True)
-    return pd.DataFrame()
-
-def _first_existing(columns, candidates):
-    for candidate in candidates:
-        if candidate in columns:
-            return candidate
-    return None
-
-def _display_columns(columns):
-    selected = {}
-    for label, candidates in DISPLAY_COLUMN_CANDIDATES.items():
-        selected[label] = _first_existing(columns, candidates)
-    return selected
-
-def _compact_signal_columns(columns):
-    display = _display_columns(columns)
-    compact = []
-    for key in (
-        "last_price",
-        "iv_rank",
-        "iv_percentile",
-        "option_volume_expansion",
-        "call_put_skew",
-        "call_volume_concentration",
-        "atm_oi_skew",
-        "insider_conviction",
-        "catalyst_flag",
-        "market_regime",
-        "is_coiling",
-        "term_structure_flag",
-        "call_skew_flag",
-        "call_volume_share",
-        "call_build_flag",
-        "consecutive_days_call_build",
-        "insider_conviction_score",
-        "total_call_volume",
-        "total_call_oi",
-    ):
-        if key == "last_price" and "last_price" in columns:
-            compact.append("last_price")
-            continue
-        col = display.get(key)
-        if col and col not in compact:
-            compact.append(col)
-    return compact, display
-
-def _validated_days(raw_days, default=14, min_days=1, max_days=180):
-    if raw_days in (None, ""):
-        return default
+# --- Tier rows by insider conviction ---
+def _to_float(value, default=0.0):
     try:
-        days = int(raw_days)
+        return float(value)
     except (TypeError, ValueError):
         return default
-    return min(max(days, min_days), max_days)
 
-#bp.jinja_env.globals["sec_url"] = sec_url
+def _tier_rows(rows):
+    """
+    3-tier prioritization by insider_conviction_score:
+      Tier 1 (highest): score >= 1
+      Tier 2 (medium): score > 0
+      Tier 3 (lowest):  score == 0 OR missing
+    """
+    tier1, tier2, tier3 = [], [], []
 
-@bp.route("/api/signals/latest")
-def api_signals_latest():
+    for r in rows:
+        score = _to_float(r.get("insider_conviction_score"), default=-999999)
+
+        if score >= 1:
+            tier1.append(r)
+        elif score > 0:
+            tier2.append(r)
+        else:
+            tier3.append(r)
+
+    key_fn = lambda row: _to_float(row.get("insider_conviction_score"), default=-999999)
+    tier1.sort(key=key_fn, reverse=True)
+    tier2.sort(key=key_fn, reverse=True)
+    tier3.sort(key=key_fn, reverse=True)
+
+    return tier1, tier2, tier3
+
+# --- Helper: build symbol-day metrics map for a single date ---
+def _get_metrics_map_for_date(run_date: str) -> dict:
+    """
+    Query SymbolDayMetric for a single date, return dict keyed by symbol.
+    Prefers .raw JSON if available; falls back to model fields.
+    """
     session = SessionLocal()
     try:
-        run_date = request.args.get("run_date")  # optional
-        q = session.query(Signal)
-        if run_date:
-            q = q.filter(Signal.run_date == run_date)
-        rows = q.order_by(Signal.created_at.desc()).limit(500).all()
-        return jsonify([r.raw for r in rows])
+        rows = session.query(SymbolDayMetric).filter(SymbolDayMetric.run_date == run_date).all()
+        out = {}
+        for r in rows:
+            if isinstance(r.raw, dict) and r.raw:
+                out[r.symbol] = r.raw
+            else:
+                out[r.symbol] = {
+                    "symbol": r.symbol,
+                    "run_date": str(r.run_date),
+                    "last_price": r.last_price,
+                    "total_call_volume": r.total_call_volume,
+                    "total_put_volume": r.total_put_volume,
+                    "call_volume_share": r.call_volume_share,
+                    "total_call_oi": r.total_call_oi,
+                    "total_put_oi": r.total_put_oi,
+                    "call_put_oi_ratio": r.call_put_oi_ratio,
+                    "call_oi_change": r.call_oi_change,
+                    "avg_call_iv": r.avg_call_iv,
+                    "avg_put_iv": r.avg_put_iv,
+                    "call_put_iv_diff": r.call_put_iv_diff,
+                    "consecutive_days_call_build": r.consecutive_days_call_build,
+                    "call_build_flag": r.call_build_flag,
+                    "insider_conviction_score": r.insider_conviction_score,
+                    "market_regime": r.market_regime,
+                    "is_coiling": r.is_coiling,
+                    "catalyst_flag": r.catalyst_flag,
+                }
+        return out
     finally:
         session.close()
+
+# --- Routes ---
+
+@bp.route("/")
+def index():
+    dates = list(_date_map().keys())
+    return render_template("index.html", dates=dates)
 
 @bp.route("/api/option_matrix")
 def api_option_matrix():
     """
     Return end-of-day option matrices for one symbol and scan date.
-
-    Matrix dimensions:
-        rows    = expiries
-        columns = strikes
-
-    The database is expected to contain one call row and one put row for
-    each symbol/run_date/expiry/strike combination.
+    Used by detail drill-down views.
     """
     symbol = (request.args.get("symbol") or "").strip().upper()
     run_date = (request.args.get("run_date") or "").strip()
 
     if not symbol or not run_date:
-        return jsonify({
-            "error": "symbol and run_date required"
-        }), 400
+        return jsonify({"error": "symbol and run_date required"}), 400
 
     session = SessionLocal()
 
     try:
         rows = (
             session.query(OptionTick)
-            .filter(
-                OptionTick.symbol == symbol,
-                OptionTick.run_date == run_date,
-            )
+            .filter(OptionTick.symbol == symbol, OptionTick.run_date == run_date)
             .all()
         )
 
         if not rows:
-            return jsonify({
-                "error": f"No option data found for {symbol} on {run_date}"
-            }), 404
+            return jsonify({"error": f"No option data found for {symbol} on {run_date}"}), 404
 
         def safe_float(value):
             if value is None:
                 return None
-
             try:
                 value = float(value)
             except (TypeError, ValueError):
                 return None
-
             if pd.isna(value):
                 return None
-
             return value
 
         def safe_int(value):
             if value is None:
                 return 0
-
             try:
                 value = int(value)
             except (TypeError, ValueError):
                 return 0
-
             return max(0, value)
 
-        # Keep only rows that can participate in a heatmap cell.
         valid_rows = [
             row for row in rows
-            if row.expiry is not None
-            and row.strike is not None
-            and str(row.right).upper() in {"C", "P"}
+            if row.expiry is not None and row.strike is not None and str(row.right).upper() in {"C", "P"}
         ]
 
         if not valid_rows:
-            return jsonify({
-                "error": f"No valid option rows found for {symbol} on {run_date}"
-            }), 404
+            return jsonify({"error": f"No valid option rows found for {symbol} on {run_date}"}), 404
 
-        expiries = sorted({
-            str(row.expiry)
-            for row in valid_rows
-        })
+        expiries = sorted({str(row.expiry) for row in valid_rows})
+        strikes = sorted({float(row.strike) for row in valid_rows})
 
-        strikes = sorted({
-            float(row.strike)
-            for row in valid_rows
-        })
-
-        # Each map is keyed by exactly one heatmap cell:
-        #
-        #     (expiry, strike)
-        #
-        # Calls and puts are intentionally kept separate.
         call_data = {}
         put_data = {}
 
@@ -309,52 +213,26 @@ def api_option_matrix():
                 put_data[key] = contract_data
 
         def value(side_data, key, field, default=None):
-            """
-            Get one field from one call/put cell.
-
-            Missing call or put contracts become None for market metrics such
-            as IV, and zero for count-like metrics such as OI and volume.
-            """
             contract = side_data.get(key)
-
             if contract is None:
                 return default
-
             return contract.get(field, default)
 
         def ratio(numerator, denominator):
-            """
-            Return a ratio only when the denominator is positive.
-
-            Returning None instead of 0 avoids incorrectly implying that a
-            legitimate zero ratio was observed when the denominator was zero.
-            """
-            if numerator is None or denominator is None:
+            if numerator is None or denominator is None or denominator <= 0:
                 return None
-
-            if denominator <= 0:
-                return None
-
             return numerator / denominator
 
-        # Initialize all matrices with the same dimensions:
-        #
-        #     len(expiries) rows
-        #     len(strikes) columns
-        #
         call_iv_matrix = []
         put_iv_matrix = []
         iv_diff_matrix = []
         iv_skew_pct_matrix = []
-
         call_oi_matrix = []
         put_oi_matrix = []
         total_oi_matrix = []
-
         call_vol_matrix = []
         put_vol_matrix = []
         total_vol_matrix = []
-
         call_put_oi_ratio_matrix = []
         call_put_vol_ratio_matrix = []
 
@@ -363,15 +241,12 @@ def api_option_matrix():
             put_iv_row = []
             iv_diff_row = []
             iv_skew_pct_row = []
-
             call_oi_row = []
             put_oi_row = []
             total_oi_row = []
-
             call_vol_row = []
             put_vol_row = []
             total_vol_row = []
-
             call_put_oi_ratio_row = []
             call_put_vol_ratio_row = []
 
@@ -380,28 +255,14 @@ def api_option_matrix():
 
                 call_iv = value(call_data, key, "iv", default=None)
                 put_iv = value(put_data, key, "iv", default=None)
-
                 call_oi = value(call_data, key, "oi", default=0)
                 put_oi = value(put_data, key, "oi", default=0)
-
                 call_volume = value(call_data, key, "volume", default=0)
                 put_volume = value(put_data, key, "volume", default=0)
 
-                # IV difference is expressed in volatility points.
-                #
-                # Example:
-                #     call IV = 0.31
-                #     put IV  = 0.34
-                #     difference = -0.03
-                #
-                # This means call IV is 3 volatility points below put IV.
                 if call_iv is not None and put_iv is not None:
                     iv_difference = call_iv - put_iv
-                    iv_skew_pct = (
-                        ((call_iv / put_iv) - 1.0) * 100.0
-                        if put_iv > 0
-                        else None
-                    )
+                    iv_skew_pct = (((call_iv / put_iv) - 1.0) * 100.0) if put_iv > 0 else None
                 else:
                     iv_difference = None
                     iv_skew_pct = None
@@ -410,58 +271,43 @@ def api_option_matrix():
                 put_iv_row.append(put_iv)
                 iv_diff_row.append(iv_difference)
                 iv_skew_pct_row.append(iv_skew_pct)
-
                 call_oi_row.append(call_oi)
                 put_oi_row.append(put_oi)
                 total_oi_row.append(call_oi + put_oi)
-
                 call_vol_row.append(call_volume)
                 put_vol_row.append(put_volume)
                 total_vol_row.append(call_volume + put_volume)
-
-                call_put_oi_ratio_row.append(
-                    ratio(call_oi, put_oi)
-                )
-                call_put_vol_ratio_row.append(
-                    ratio(call_volume, put_volume)
-                )
+                call_put_oi_ratio_row.append(ratio(call_oi, put_oi))
+                call_put_vol_ratio_row.append(ratio(call_volume, put_volume))
 
             call_iv_matrix.append(call_iv_row)
             put_iv_matrix.append(put_iv_row)
             iv_diff_matrix.append(iv_diff_row)
             iv_skew_pct_matrix.append(iv_skew_pct_row)
-
             call_oi_matrix.append(call_oi_row)
             put_oi_matrix.append(put_oi_row)
             total_oi_matrix.append(total_oi_row)
-
             call_vol_matrix.append(call_vol_row)
             put_vol_matrix.append(put_vol_row)
             total_vol_matrix.append(total_vol_row)
-
             call_put_oi_ratio_matrix.append(call_put_oi_ratio_row)
             call_put_vol_ratio_matrix.append(call_put_vol_ratio_row)
 
         return jsonify({
             "symbol": symbol,
             "run_date": run_date,
-
             "expiries": expiries,
             "strikes": strikes,
-
             "call_iv_matrix": call_iv_matrix,
             "put_iv_matrix": put_iv_matrix,
             "iv_diff_matrix": iv_diff_matrix,
             "iv_skew_pct_matrix": iv_skew_pct_matrix,
-
             "call_oi_matrix": call_oi_matrix,
             "put_oi_matrix": put_oi_matrix,
             "total_oi_matrix": total_oi_matrix,
-
             "call_vol_matrix": call_vol_matrix,
             "put_vol_matrix": put_vol_matrix,
             "total_vol_matrix": total_vol_matrix,
-
             "call_put_oi_ratio_matrix": call_put_oi_ratio_matrix,
             "call_put_vol_ratio_matrix": call_put_vol_ratio_matrix,
         })
@@ -469,73 +315,51 @@ def api_option_matrix():
     finally:
         session.close()
 
-@bp.route("/")
-def index():
-    dates = list(_date_map().keys())
-    return render_template("index.html", dates=dates)
+# ============================================
+# PRIMARY VIEWS: Three main routes
+# ============================================
 
-# --- helper: fetch symbol_day_metrics for a run_date into a dict keyed by symbol ---
-def get_metrics_map_for_date(run_date: str) -> dict:
+@bp.route("/day/<date_str>")
+def day_view(date_str):
     """
-    Returns a dict mapping symbol -> metrics dict for the given run_date.
-    Uses the SymbolDayMetric table and returns the stored .raw JSON if available,
-    otherwise converts the model fields into a minimal dict.
+    Single-date scan view: show all candidates from the CSV for this date,
+    enriched with SymbolDayMetric data. Filter by metric fields.
     """
-    session = SessionLocal()
-    try:
-        rows = (
-            session.query(SymbolDayMetric)
-            .filter(SymbolDayMetric.run_date == run_date)
-            .all()
-        )
-        out = {}
-        for r in rows:
-            # prefer the persisted raw JSON for full traceability
-            if isinstance(r.raw, dict) and r.raw:
-                out[r.symbol] = r.raw
-            else:
-                out[r.symbol] = {
-                    "symbol": r.symbol,
-                    "run_date": str(r.run_date),
-                    "last_price": r.last_price,
-                    "total_call_volume": r.total_call_volume,
-                    "total_put_volume": r.total_put_volume,
-                    "call_volume_share": r.call_volume_share,
-                    "total_call_oi": r.total_call_oi,
-                    "total_put_oi": r.total_put_oi,
-                    "call_put_oi_ratio": r.call_put_oi_ratio,
-                    "top_call_line_volume": r.top_call_line_volume,
-                    "top_call_line_share": r.top_call_line_share,
-                    "top_3_call_concentration_pct": r.top_3_call_concentration_pct,
-                    "avg_call_iv": r.avg_call_iv,
-                    "avg_put_iv": r.avg_put_iv,
-                    "call_put_iv_diff": r.call_put_iv_diff,
-                    "consecutive_days_call_build": r.consecutive_days_call_build,
-                    "call_build_flag": r.call_build_flag,
-                    "insider_conviction_score": r.insider_conviction_score,
-                    "market_regime": r.market_regime,
-                    "is_coiling": r.is_coiling,
-                }
-        return out
-    finally:
-        session.close()
+    df = _load_day(date_str)
+    csv_rows = df.to_dict(orient="records")
+    columns = list(df.columns)
 
-def _filter_day_rows(rows, args):
-    symbol = (args.get("symbol") or "").strip().upper()
-    market_regime = (args.get("market_regime") or "").strip()
-    min_insider = args.get("min_insider")
-    call_build_flag = args.get("call_build_flag")
+    metrics_map = _get_metrics_map_for_date(date_str)
 
-    out = []
-    for r in rows:
-        if symbol and (r.get("symbol") or "").upper() != symbol:
+    extended_rows = []
+    for r in csv_rows:
+        symbol = (r.get("symbol") or "").upper()
+        m = metrics_map.get(symbol)
+        merged = r.copy()
+        merged["metrics"] = m or {}
+        # Expose key metrics at top-level for easier filtering/display
+        merged["call_volume_share"] = m.get("call_volume_share") if m else None
+        merged["call_build_flag"] = m.get("call_build_flag") if m else None
+        merged["consecutive_days_call_build"] = m.get("consecutive_days_call_build") if m else None
+        merged["insider_conviction_score"] = m.get("insider_conviction_score") if m else None
+        merged["total_call_volume"] = m.get("total_call_volume") if m else None
+        merged["total_call_oi"] = m.get("total_call_oi") if m else None
+        merged["market_regime"] = m.get("market_regime") if m else None
+        merged["catalyst_flag"] = m.get("catalyst_flag") if m else None
+        extended_rows.append(merged)
+
+    # Filter rows based on query parameters
+    symbol_filter = (request.args.get("symbol") or "").strip().upper()
+    market_regime = (request.args.get("market_regime") or "").strip()
+    min_insider = request.args.get("min_insider")
+    call_build_flag = request.args.get("call_build_flag")
+
+    filtered_rows = []
+    for r in extended_rows:
+        if symbol_filter and (r.get("symbol") or "").upper() != symbol_filter:
             continue
-
-        if market_regime:
-            mr = (r.get("market_regime") or "")
-            if mr != market_regime:
-                continue
-
+        if market_regime and (r.get("market_regime") or "") != market_regime:
+            continue
         if min_insider:
             try:
                 score = float(r.get("insider_conviction_score") or 0)
@@ -543,139 +367,35 @@ def _filter_day_rows(rows, args):
                     continue
             except Exception:
                 continue
-
         if call_build_flag == "1":
             if r.get("call_build_flag") not in [1, "1", True]:
                 continue
         elif call_build_flag == "0":
             if r.get("call_build_flag") in [1, "1", True]:
                 continue
+        filtered_rows.append(r)
 
-        out.append(r)
-
-    return out
-
-# --- Day view: merge CSV rows with symbol_day_metrics for the given date ---
-@bp.route("/day/<date_str>")
-def day_view(date_str):
-    df = _load_day(date_str)
-    csv_rows = df.to_dict(orient="records")
-    columns = list(df.columns)
-
-    # fetch metrics for the date and merge into each row under 'metrics' key
-    metrics_map = get_metrics_map_for_date(date_str)
-
-    # Merge: augment CSV row dicts with keys from metrics_map if available
-    extended_rows = []
-    for r in csv_rows:
-        symbol = (r.get("symbol") or "").upper()
-        m = metrics_map.get(symbol)
-        # merge metric fields into top-level keys for easy templating (do not overwrite existing CSV keys)
-        merged = r.copy()
-        merged["metrics"] = m or {}
-        # convenience: expose some metric keys at top-level for table rendering
-        merged["call_volume_share"] = (m.get("call_volume_share") if m else None)
-        merged["call_build_flag"] = (m.get("call_build_flag") if m else None)
-        merged["consecutive_days_call_build"] = (m.get("consecutive_days_call_build") if m else None)
-        merged["insider_conviction_score"] = (m.get("insider_conviction_score") if m else None)
-        merged["total_call_volume"] = (m.get("total_call_volume") if m else None)
-        merged["total_call_oi"] = (m.get("total_call_oi") if m else None)
-
-        extended_rows.append(merged)
-
-    selected_symbol = request.args.get("symbol") or (extended_rows[0]["symbol"] if extended_rows else "")
-
-    filtered_rows = _filter_day_rows(extended_rows, request.args)
     tier1_rows, tier2_rows, tier3_rows = _tier_rows(filtered_rows)
-   
-    compact_columns, display_columns = _compact_signal_columns(extended_rows) # TODO
+    initial_symbol_filter = symbol_filter or (extended_rows[0]["symbol"] if extended_rows else "")
 
     return render_template(
         "day.html",
         date_str=date_str,
         columns=columns,
-        rows=extended_rows,  # now CSV rows augmented with 'metrics'
+        rows=extended_rows,
         tier1_rows=tier1_rows,
         tier2_rows=tier2_rows,
         tier3_rows=tier3_rows,
-        selected_symbol=selected_symbol,
-        compact_columns=compact_columns,
-        display_columns=display_columns
+        initial_symbol_filter=initial_symbol_filter,
     )
-
-def _rolling_frames(days: int) -> pd.DataFrame:
-    date_map = _date_map()
-    date_list = list(date_map.keys())[:days]
-    frames = []
-    for d in date_list:
-        df = _load_day(d)
-        df["scan_date"] = d
-        frames.append(df)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-@bp.route("/rolling/<int:days>")
-def rolling_view(days: int):
-    df = _rolling_frames(days)
-    if df.empty:
-        return render_template("rolling.html", days=days, rows=[], industries=[])
-
-    counts = (
-        df.groupby("symbol")
-        .agg(
-            appearances=("symbol", "count"),
-            days=("scan_date", lambda s: sorted(set(s))),
-            industry=("industry", "first")  # Pulls industry straight from your daily CSV rows
-        )
-        .reset_index()
-        .sort_values(["appearances", "symbol"], ascending=[False, True])
-    )
-    counts = counts[counts["appearances"] > 1]
-    counts["industry"] = counts["industry"].fillna("Unknown")
-
-    industry_breakdown = (
-        counts.groupby("industry")["symbol"]
-        .nunique()
-        .reset_index()
-        .rename(columns={"symbol": "ticker_count"})
-        .sort_values("ticker_count", ascending=False)
-    )
-
-    rows = counts.to_dict(orient="records")
-    industries = industry_breakdown.to_dict(orient="records")
-
-    return render_template(
-        "rolling.html",
-        days=days,
-        rows=rows,
-        industries=industries,
-    )
-
-@bp.route("/rolling")
-@bp.route("/rolling/")
-def rolling_query_view():
-    days = _validated_days(request.args.get("days"))
-    return rolling_view(days)
-
-@bp.route("/weekly")
-def weekly():
-    return rolling_view(7)
-
-@bp.route("/monthly")
-def monthly():
-    return rolling_view(30)
-
-@bp.route("/search")
-def search():
-    symbol = (request.args.get("symbol") or "").strip().upper()
-    if not symbol:
-        return redirect(url_for("api.index"))
-    return redirect(url_for("api.ticker_view", symbol=symbol))
-
 
 @bp.route("/ticker/<symbol>")
 def ticker_view(symbol):
+    """
+    Multi-day symbol history: query SymbolDayMetric over custom date range,
+    show trends, charts, and multi-day metrics.
+    """
     symbol = symbol.upper()
-
     date_from = request.args.get("date_from") or ""
     date_to = request.args.get("date_to") or ""
 
@@ -696,11 +416,8 @@ def ticker_view(symbol):
 
     metrics_rows = sorted(metrics_rows, key=lambda r: r.get("run_date", ""))
     latest_metric = metrics_rows[-1]
-
-    # trend summary
     trend = compute_trend_metrics(metrics_rows)
 
-    # convert to chart points
     chart_points = [{
         "date": r.get("run_date"),
         "call_oi": r.get("total_call_oi"),
@@ -722,17 +439,12 @@ def ticker_view(symbol):
         chart_points=chart_points,
     )
 
-@bp.route("/api/metrics/latest")
-def api_metrics_latest():
-    run_date = request.args.get("run_date")
-    if not run_date:
-        return jsonify({"error": "run_date required"}), 400
-    metrics = get_metrics_map_for_date(run_date)
-    # return list of metrics dict
-    return jsonify(list(metrics.values()))
-
 @bp.route("/recurrences")
 def recurrences():
+    """
+    Cross-symbol recurrence search: find symbols appearing N+ times over a date range,
+    with configurable metric filters.
+    """
     date_from = request.args.get("date_from") or ""
     date_to = request.args.get("date_to") or ""
     min_occurrences = request.args.get("min_occurrences", "2")
@@ -742,7 +454,6 @@ def recurrences():
     except ValueError:
         min_occurrences = 2
 
-    # parse filter fields
     filters = {
         "min_call_volume_share": request.args.get("min_call_volume_share") or None,
         "max_call_volume_share": request.args.get("max_call_volume_share") or None,
@@ -781,3 +492,48 @@ def recurrences():
         rows=filtered,
         filters=filters,
     )
+
+# ============================================
+# AUXILIARY ROUTES (kept for backward compat)
+# ============================================
+
+@bp.route("/search")
+def search():
+    """Redirect: search by symbol → ticker view."""
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return redirect(url_for("api.index"))
+    return redirect(url_for("api.ticker_view", symbol=symbol))
+
+@bp.route("/api/signals/latest")
+def api_signals_latest():
+    """Legacy API: return raw Signal rows for a date."""
+    session = SessionLocal()
+    try:
+        run_date = request.args.get("run_date")
+        q = session.query(Signal)
+        if run_date:
+            q = q.filter(Signal.run_date == run_date)
+        rows = q.order_by(Signal.created_at.desc()).limit(500).all()
+        return jsonify([r.raw for r in rows])
+    finally:
+        session.close()
+
+@bp.route("/api/metrics/latest")
+def api_metrics_latest():
+    """Legacy API: return SymbolDayMetric rows for a date."""
+    run_date = request.args.get("run_date")
+    if not run_date:
+        return jsonify({"error": "run_date required"}), 400
+    metrics = _get_metrics_map_for_date(run_date)
+    return jsonify(list(metrics.values()))
+
+# --- DEPRECATED: /rolling/* routes now redirect to /recurrences ---
+@bp.route("/rolling")
+@bp.route("/rolling/")
+@bp.route("/rolling/<int:days>")
+@bp.route("/weekly")
+@bp.route("/monthly")
+def rolling_deprecated(days=None):
+    """Redirect old rolling views to the new recurrences view."""
+    return redirect(url_for("api.recurrences"))

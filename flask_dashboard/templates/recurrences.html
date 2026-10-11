@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block content %}
+
+<div class="card">
+  <h2 style="margin:0 0 8px 0;">Recurring symbols search</h2>
+  <p class="muted" style="margin:0;">Custom date-range search across all symbols with multi-day appearances.</p>
+</div>
+
+<div class="card">
+  <form method="get" class="search-form" style="display:flex; flex-wrap:wrap; gap:10px; align-items:end;">
+    <label>
+      Date from
+      <input type="date" name="date_from" value="{{ date_from or '' }}">
+    </label>
+
+    <label>
+      Date to
+      <input type="date" name="date_to" value="{{ date_to or '' }}">
+    </label>
+
+    <label>
+      Min occurrences
+      <input type="number" name="min_occurrences" min="1" value="{{ min_occurrences or 2 }}">
+    </label>
+
+    <label>
+      Min call vol share
+      <input type="number" step="0.01" min="0" max="1" name="min_call_volume_share" value="{{ filters.min_call_volume_share or '' }}">
+    </label>
+
+    <label>
+      Min insider
+      <input type="number" step="0.1" min="0" name="min_insider_conviction" value="{{ filters.min_insider_conviction or '' }}">
+    </label>
+
+    <label>
+      Min call build streak
+      <input type="number" min="0" name="min_consecutive_call_build" value="{{ filters.min_consecutive_call_build or '' }}">
+    </label>
+
+    <label>
+      Min Call OI
+      <input type="number" min="0" name="min_call_oi" value="{{ filters.min_call_oi or '' }}">
+    </label>
+
+    <label>
+      Max Call OI
+      <input type="number" min="0" name="max_call_oi" value="{{ filters.max_call_oi or '' }}">
+    </label>
+
+    <button type="submit">Apply filters</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Occurrences</th>
+          <th>Dates</th>
+          <th>Avg Call Vol Share</th>
+          <th>Avg Insider</th>
+          <th>Max Build Streak</th>
+          <th>Trend</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
+          <td>{{ r.occurrences }}</td>
+          <td>
+            {% for d in r.dates %}
+              <a href="{{ url_for('api.day_view', date_str=d) }}">{{ d }}</a>{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </td>
+          <td>
+            {% if r.trends.call_vol_share_avg is not none %}
+              {{ (r.trends.call_vol_share_avg * 100) | round(1) }}%
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ r.trends.insider_avg or '—' }}</td>
+          <td>{{ r.trends.max_consecutive_call_build or 0 }}</td>
+          <td>
+            {% if r.trends.call_oi_change is not none %}
+              Call OI Δ: {{ r.trends.call_oi_change }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}

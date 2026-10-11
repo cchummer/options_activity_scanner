@@ -1,10 +1,5 @@
 {% extends "base.html" %}
 {% block content %}
-{% set catalyst_col = display_columns['catalyst_flag'] %}
-{% set coiling_col = display_columns['is_coiling'] %}
-{% set call_skew_col = display_columns['call_skew_flag'] %}
-{% set term_col = display_columns['term_structure_flag'] %}
-{% set insider_col = display_columns['insider_conviction'] %}
 
 {% macro flag_badge(value, label) -%}
   {% if value in [1, '1', True, 'True'] %}
@@ -14,57 +9,65 @@
   {% endif %}
 {%- endmacro %}
 
-{% macro render_compact_rows(rows, compact_columns, date_str) -%}
-  {% for r in rows %}
-    <tr class="signal-row" data-symbol="{{ r.symbol }}">
-      <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
-      {% for c in compact_columns %}
-        {% if c != "symbol" %}
-          <td>{{ r[c] }}</td>
-        {% endif %}
-      {% endfor %}
-      <td>
-        {% if catalyst_col %}{{ flag_badge(r[catalyst_col], "Catalyst") }} {% endif %}
-        {% if coiling_col %}{{ flag_badge(r[coiling_col], "Coiling") }} {% endif %}
-        {% if call_skew_col %}{{ flag_badge(r[call_skew_col], "Call skew") }} {% endif %}
-        {% if term_col %}{{ flag_badge(r[term_col], "Term") }} {% endif %}
-        {% if insider_col and (r[insider_col] or 0) >= 1 %}
-          <span class="badge warn">Insider: High</span>
-        {% elif insider_col and (r[insider_col] or 0) > 0 %}
-          <span class="badge neutral">Insider: Medium</span>
-        {% else %}
-          <span class="badge bad">Insider: Low</span>
-        {% endif %}
-      </td>
-      <td>
-        <a href="/day/{{ date_str }}?symbol={{ r.symbol }}">Chart</a> ·
-        <a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">Ticker</a> ·
-        <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a> ·
-        <a href="{{ sec_url(r.symbol, '8-K') }}" target="_blank">8-K</a> ·
-        <a href="{{ sec_url(r.symbol, '10-Q') }}" target="_blank">10-Q</a> ·
-        <a href="{{ sec_url(r.symbol, '10-K') }}" target="_blank">10-K</a>
-      </td>
-    </tr>
-  {% endfor %}
+{% macro render_tier_table(rows, date_str, tier_name) -%}
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Last Price</th>
+          <th>Call Vol Share</th>
+          <th>Call OI</th>
+          <th>Call Build</th>
+          <th>Insider</th>
+          <th>Catalyst</th>
+          <th>Regime</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="signal-row" data-symbol="{{ r.symbol }}">
+          <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
+          <td>{{ r.last_price or '—' }}</td>
+          <td>
+            {% if r.call_volume_share is not none %}
+              {{ (r.call_volume_share * 100) | round(1) }}%
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>{{ r.total_call_oi or '—' }}</td>
+          <td>{{ 'Y' if r.call_build_flag in [1, '1', True] else 'N' }}</td>
+          <td>{{ r.insider_conviction_score or '—' }}</td>
+          <td>{{ 'Y' if r.catalyst_flag in [1, '1', True] else 'N' }}</td>
+          <td>{{ r.market_regime or '—' }}</td>
+          <td>
+            <a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">Ticker</a> ·
+            <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 {%- endmacro %}
 
 <div class="card">
   <h2 style="margin:0;">Scan date: {{ date_str }}</h2>
-  <p class="muted" style="margin:4px 0 0 0;">Focus on actionable signals first, then expand raw fields when needed.</p>
+  <p class="muted" style="margin:4px 0 0 0;">Single-date candidate screening. Click symbol for multi-day trend view.</p>
 </div>
 
 <div class="card">
   <h3 style="margin-top:0;">Filter this scan</h3>
-
   <form method="get" class="search-form">
-    <input type="text" name="symbol" value="{{ selected_symbol or '' }}" placeholder="Symbol filter">
+    <input type="text" name="symbol" placeholder="Symbol filter" style="text-transform:uppercase;">
     <select name="market_regime">
       <option value="">Any regime</option>
       <option value="Bullish">Bullish</option>
       <option value="Neutral">Neutral</option>
       <option value="Bearish">Bearish</option>
     </select>
-
     <select name="min_insider">
       <option value="">Insider min</option>
       <option value="0">0</option>
@@ -72,123 +75,50 @@
       <option value="1">1.0</option>
       <option value="2">2.0</option>
     </select>
-
     <select name="call_build_flag">
       <option value="">Build flag</option>
       <option value="1">Call build yes</option>
       <option value="0">No build</option>
     </select>
-
     <button type="submit">Filter</button>
   </form>
 </div>
 
 <div class="card">
-  <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-    <strong>Filter symbols:</strong>
-    <input id="symbol-filter" type="text" placeholder="e.g. AAPL" style="text-transform:uppercase;">
-    <a href="{{ url_for('api.ticker_view', symbol=selected_symbol) }}" class="badge neutral" style="text-decoration:none;">Open ticker detail: {{ selected_symbol }}</a>
-  </div>
-</div>
-
-{% if selected_symbol %}
-<div class="card">
-  <h3 style="margin-top:0;">TradingView</h3>
-  <div id="tv-chart"></div>
-  <script src="https://s3.tradingview.com/tv.js"></script>
-  <script>
-    new TradingView.widget({
-      "container_id": "tv-chart",
-      "symbol": "{{ selected_symbol }}",
-      "interval": "D",
-      "width": "100%",
-      "height": 380,
-      "theme": "light"
-    });
-  </script>
-</div>
-{% endif %}
-
-<div class="card">
   <h3 style="margin-top:0;">Tier 1 (highest conviction) — {{ tier1_rows|length }}</h3>
-  <div class="table-wrap">
-    <table class="compact-table">
-      <thead>
-        <tr>
-          <th>Symbol</th>
-          {% for c in compact_columns %}{% if c != "symbol" %}<th>{{ c }}</th>{% endif %}{% endfor %}
-          <th>Flags</th>
-          <th>Links</th>
-        </tr>
-      </thead>
-      <tbody>{{ render_compact_rows(tier1_rows, compact_columns, date_str) }}</tbody>
-    </table>
-  </div>
+  {{ render_tier_table(tier1_rows, date_str, "tier1") }}
 </div>
 
 <details class="card">
-  <summary>Show Tier 2 (medium conviction) — {{ tier2_rows|length }}</summary>
-  <div class="table-wrap" style="margin-top:8px;">
-    <table class="compact-table">
-      <thead>
-        <tr>
-          <th>Symbol</th>
-          {% for c in compact_columns %}{% if c != "symbol" %}<th>{{ c }}</th>{% endif %}{% endfor %}
-          <th>Flags</th>
-          <th>Links</th>
-        </tr>
-      </thead>
-      <tbody>{{ render_compact_rows(tier2_rows, compact_columns, date_str) }}</tbody>
-    </table>
+  <summary>Tier 2 (medium conviction) — {{ tier2_rows|length }}</summary>
+  <div style="margin-top:12px;">
+    {{ render_tier_table(tier2_rows, date_str, "tier2") }}
   </div>
 </details>
 
 <details class="card">
-  <summary>Show Tier 3 (lowest conviction) — {{ tier3_rows|length }}</summary>
-  <div class="table-wrap" style="margin-top:8px;">
-    <table class="compact-table">
-      <thead>
-        <tr>
-          <th>Symbol</th>
-          {% for c in compact_columns %}{% if c != "symbol" %}<th>{{ c }}</th>{% endif %}{% endfor %}
-          <th>Flags</th>
-          <th>Links</th>
-        </tr>
-      </thead>
-      <tbody>{{ render_compact_rows(tier3_rows, compact_columns, date_str) }}</tbody>
-    </table>
+  <summary>Tier 3 (lowest conviction) — {{ tier3_rows|length }}</summary>
+  <div style="margin-top:12px;">
+    {{ render_tier_table(tier3_rows, date_str, "tier3") }}
   </div>
 </details>
 
 <details class="card">
-  <summary>Show all fields for all tiers (raw CSV columns)</summary>
+  <summary>All raw CSV fields ({{ rows|length }} total)</summary>
   <div class="table-wrap" style="margin-top:8px;">
-    <table>
+    <table style="font-size:11px;">
       <thead>
         <tr>
           {% for c in columns %}<th>{{ c }}</th>{% endfor %}
         </tr>
       </thead>
       <tbody>
-        {% for group in [tier1_rows, tier2_rows, tier3_rows] %}
-          {% for r in group %}
-            <tr>{% for c in columns %}<td>{{ r[c] }}</td>{% endfor %}</tr>
-          {% endfor %}
+        {% for r in tier1_rows + tier2_rows + tier3_rows %}
+          <tr>{% for c in columns %}<td>{{ r[c] }}</td>{% endfor %}</tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </details>
 
-<script>
-  const filterInput = document.getElementById("symbol-filter");
-  function applySymbolFilter() {
-    const q = (filterInput.value || "").trim().toUpperCase();
-    document.querySelectorAll(".signal-row").forEach((row) => {
-      const symbol = (row.dataset.symbol || "").toUpperCase();
-      row.style.display = !q || symbol.includes(q) ? "" : "none";
-    });
-  }
-  filterInput.addEventListener("input", applySymbolFilter);
-</script>
 {% endblock %}
