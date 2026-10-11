@@ -7,6 +7,9 @@
 </div>
 
 <div class="card">
+  <p class="muted" style="margin:0 0 12px 0;">
+    <strong>Find symbols that appeared multiple times in your date range and match these criteria:</strong>
+  </p>
   <form method="get" class="search-form" style="display:flex; flex-wrap:wrap; gap:10px; align-items:end;">
     <label>
       Date from
@@ -50,6 +53,52 @@
 
     <button type="submit">Apply filters</button>
   </form>
+</div>
+
+<div class="card">
+  {% if rows %}
+    <h3 style="margin-top:0;">{{ rows|length }} symbol(s) found</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Occurrences</th>
+            <th>Dates</th>
+            <th>Avg Call Vol Share</th>
+            <th>Avg Insider</th>
+            <th>Max Build Streak</th>
+            <th>Call OI Δ</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td><a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">{{ r.symbol }}</a></td>
+            <td>{{ r.occurrences }}</td>
+            <td style="font-size:12px;">
+              {% for d in r.dates %}
+                <a href="{{ url_for('api.day_view', date_str=d) }}">{{ d }}</a>{% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+            </td>
+            <td>
+              {% if r.trends.call_vol_share_avg is not none %}
+                {{ (r.trends.call_vol_share_avg * 100) | round(1) }}%
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>{{ r.trends.insider_avg | round(2) if r.trends.insider_avg else '—' }}</td>
+            <td>{{ r.trends.max_consecutive_call_build or 0 }}</td>
+            <td>{{ r.trends.call_oi_change or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No symbols found matching your filters.</p>
+  {% endif %}
 </div>
 
 <div class="card">

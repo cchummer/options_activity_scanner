@@ -1,9 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Available Scan Dates</h2>
-<ul>
-  {% for d in dates %}
-    <li><a href="/day/{{ d }}">{{ d }}</a></li>
-  {% endfor %}
-</ul>
+
+<div class="card">
+  <h2 style="margin:0;">Dashboard</h2>
+  <p class="muted" style="margin:4px 0 0 0;">
+    <strong>Three ways to explore:</strong>
+    (1) Pick a scan date below to view candidates from that day,
+    (2) Use the "Recurring symbols" view to search across date ranges,
+    or (3) Search for a symbol above.
+  </p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0;">Available scan dates</h3>
+  <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px;">
+    {% for d in dates %}
+      <a href="{{ url_for('api.day_view', date_str=d) }}" style="text-decoration:none; padding:8px; background:#f0f7ff; border:1px solid #b8d4ff; border-radius:8px; text-align:center; font-weight:600; color:#175ddc;">
+        {{ d }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+
 {% endblock %}
