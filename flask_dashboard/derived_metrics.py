@@ -45,6 +45,27 @@ def _safe_int(val, default=0):
         return default
 
 
+def _gini(values):
+    """
+    Return Gini coefficient for a list of non-negative numbers.
+    0 = perfect equality, 1 = maximal concentration.
+    """
+    try:
+        vals = [float(v) for v in values if v is not None and float(v) >= 0]
+        if not vals:
+            return None
+        vals = sorted(vals)
+        n = len(vals)
+        cumvals = 0.0
+        for i, v in enumerate(vals, 1):
+            cumvals += (2*i - n - 1) * v
+        total = sum(vals)
+        if total == 0:
+            return 0.0
+        return cumvals / (n * total)
+    except Exception:
+        return None
+
 def get_option_contracts(symbol: str, run_date: str) -> List[Dict]:
     """
     Query OptionTick rows for symbol and run_date and return a list of normalized dicts.
@@ -345,6 +366,12 @@ def compute_symbol_day_metrics(symbol: str, run_date: str, save: bool = True) ->
     top3 = sorted((c["volume"] for c in call_contracts), reverse=True)[:3]
     top_3_call_concentration_pct = (sum(top3) / total_call_volume) if total_call_volume > 0 else None
 
+    # concentration metrics: gini on OI and volume for call contracts
+    call_oi_list = [c.get("open_interest", 0) for c in call_contracts]
+    call_vol_list = [c.get("volume", 0) for c in call_contracts]
+    call_oi_gini = _gini(call_oi_list)
+    call_vol_gini = _gini(call_vol_list)
+
     # dominant expiry by call vol
     expiry_call_vol = {}
     for c in call_contracts:
@@ -458,6 +485,8 @@ def compute_symbol_day_metrics(symbol: str, run_date: str, save: bool = True) ->
         "top_call_line_volume": top_call_line_volume,
         "top_call_line_share": top_call_line_share,
         "top_3_call_concentration_pct": top_3_call_concentration_pct,
+        "call_oi_gini": call_oi_gini,
+        "call_vol_gini": call_vol_gini,
         "dominant_expiry_by_call_vol": dominant_expiry_by_call_vol,
         "avg_call_iv": avg_call_iv,
         "avg_put_iv": avg_put_iv,

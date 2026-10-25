@@ -81,6 +81,11 @@
     <canvas id="tickerChart" height="120"></canvas>
   </div>
 
+  <div class="card" id="expiry-oi-card">
+    <h3 style="margin-top:0;">Expiry OI breakdown (stacked)</h3>
+    <div id="expiry-oi-plot" class="plot"></div>
+  </div>
+
   <div class="card">
     <h3 style="margin-top:0;">Range summary</h3>
     <div class="kpi-grid">
@@ -206,6 +211,52 @@ if (data.length) {
     }
   });
 }
+</script>
+
+<script>
+async function loadExpiryOI() {
+  const symbol = "{{ symbol }}";
+  const date_from = "{{ date_from or '' }}";
+  const date_to = "{{ date_to or '' }}";
+  const url = `/api/expiry_oi_timeseries?symbol=${symbol}` + (date_from ? `&date_from=${date_from}` : '') + (date_to ? `&date_to=${date_to}` : '');
+  try {
+    const resp = await fetch(url);
+    const payload = await resp.json();
+    if(!payload || !payload.dates || Object.keys(payload.series||{}).length===0){
+      document.getElementById('expiry-oi-plot').innerHTML = '<div class="muted">No expiry OI series available</div>';
+      return;
+    }
+    const dates = payload.dates;
+    const series = payload.series;
+    const traces = [];
+    const colors = ['#175ddc', '#1f8b4c', '#b15a00', '#7a3fb3', '#c8c8c8']; // palette
+    let i=0;
+    for(const [expiry, values] of Object.entries(series)){
+      traces.push({
+        x: dates,
+        y: values,
+        name: expiry,
+        type: 'bar',
+        marker: { color: colors[i % colors.length] },
+      });
+      i += 1;
+    }
+    const layout = {
+      barmode: 'stack',
+      title: `${symbol} Call OI by expiry`,
+      xaxis: { tickangle: -45 },
+      height: 320,
+      margin: { t:40, l:40, r:10, b:120 }
+    };
+    Plotly.newPlot('expiry-oi-plot', traces, layout, {displayModeBar:false});
+  } catch(err) {
+    document.getElementById('expiry-oi-plot').innerHTML = '<div class="muted">Error loading expiry OI series</div>';
+    console.error(err);
+  }
+}
+
+// call after page load
+document.addEventListener('DOMContentLoaded', loadExpiryOI);
 </script>
 
 {% endblock %}

@@ -315,6 +315,141 @@ def api_option_matrix():
     finally:
         session.close()
 
+@bp.route("/api/iv_distribution")
+def api_iv_distribution():
+    """
+    Return contract-level info for a symbol + run_date:
+      - conid, expiry, strike, right, iv, delta, oi, volume, bid/ask/last, moneyness, multiplier
+    Example: /api/iv_distribution?symbol=AAPL&run_date=2026-06-12
+    """
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    run_date = (request.args.get("run_date") or "").strip()
+    if not symbol or not run_date:
+        return jsonify({"error": "symbol and run_date required"}), 400
+
+    session = SessionLocal()
+    try:
+        # optionally cache the result for a short time
+        #@cache_ttl(300)
+        def _query(symbol_inner, run_date_inner):
+            rows = session.query(OptionTick).filter(
+                OptionTick.symbol == symbol_inner,
+                OptionTick.run_date == run_date_inner
+            ).all()
+            # try to get a last price from Signal or OptionTick underlying
+            sig = session.query(Signal).filter(Signal.symbol == symbol_inner, Signal.run_date == run_date_inner).first()
+            last_price = getattr(sig, "last_price", None) if sig else None
+
+            out = []
+            for r in rows:
+                if r.expiry is None or r.strike is None:
+                    continue
+                try:
+                    strike_f = float(r.strike)
+                except Exception:
+                    continue
+                moneyness = None
+                try:
+                    up = getattr(r, "underlying_price", None)
+                    base_price = last_price or up
+                    if base_price:
+                        moneyness = (strike_f / float(base_price)) - 1.0
+                except Exception:
+                    moneyness = None
+
+                out.append({
+                    "conid": int(r.conid) if r.conid is not None else None,
+                    "expiry": str(r.expiry),
+                    "strike": strike_f,
+                    "right": (r.right or "").upper() if r.right is not None else None,
+                    "iv": float(r.implied_vol) if r.implied_vol is not None else None,
+                    "delta": float(r.delta) if r.delta is not None else None,
+                    "oi": int(r.open_interest or 0),
+                    "volume": int(r.volume or 0),
+                    "bid": float(r.bid) if r.bid is not None else None,
+                    "ask": float(r.ask) if r.ask is not None else None,
+                    "last": float(r.last) if r.last is not None else None,
+                    "moneyness": float(moneyness) if moneyness is not None else None,
+                    "multiplier": float(r.multiplier) if r.multiplier else 100.0,
+                    "raw": r.raw or {}
+                })
+            # simple sort: calls first, then by oi desc
+            out.sort(key=lambda x: (x["right"] != "C", -x["oi"]))
+            return out
+
+        data = _query(symbol, run_date)
+        return jsonify(data)
+    finally:
+        session.close()
+
+from sqlalchemy import func
+
+@bp.route("/api/expiry_oi_timeseries")
+def api_expiry_oi_timeseries():
+    """
+    Return expiry -> list of {date, total_oi, total_volume} for CALLs for a symbol over a date range.
+    Query parameters:
+      - symbol (required)
+      - date_from (optional YYYY-MM-DD)
+      - date_to   (optional YYYY-MM-DD)
+    Response format:
+      { "dates": [...], "series": { "2026-09-17": [ints...], ... } }  (expiry keys)
+    """
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "symbol required"}), 400
+    date_from = request.args.get("date_from")
+    date_to = request.args.get("date_to")
+
+    session = SessionLocal()
+    try:
+        # group by run_date + expiry for CALLs
+        q = session.query(
+            OptionTick.run_date.label("run_date"),
+            OptionTick.expiry.label("expiry"),
+            func.sum(OptionTick.open_interest).label("total_oi"),
+            func.sum(OptionTick.volume).label("total_volume")
+        ).filter(OptionTick.symbol == symbol, func.upper(OptionTick.right) == "C")
+
+        if date_from:
+            q = q.filter(OptionTick.run_date >= date_from)
+        if date_to:
+            q = q.filter(OptionTick.run_date <= date_to)
+
+        q = q.group_by(OptionTick.run_date, OptionTick.expiry).order_by(OptionTick.run_date.asc())
+        rows = q.all()
+
+        # pivot-> dict[date][expiry] = oi
+        pivot = {}
+        totals_by_expiry = {}
+        for run_date, expiry, total_oi, total_vol in rows:
+            d = str(run_date)
+            e = str(expiry) if expiry is not None else "None"
+            pivot.setdefault(d, {})[e] = int(total_oi or 0)
+            totals_by_expiry[e] = totals_by_expiry.get(e, 0) + int(total_oi or 0)
+
+        # choose top expiries by total OI across range
+        top_n = 4
+        top_expiries = [e for e,_ in sorted(totals_by_expiry.items(), key=lambda kv: kv[1], reverse=True)[:top_n]]
+
+        dates = sorted(pivot.keys())
+        series = {}
+        for e in top_expiries:
+            series[e] = [pivot.get(d, {}).get(e, 0) for d in dates]
+
+        # group the rest into 'Other'
+        series["Other"] = []
+        for d in dates:
+            rest = 0
+            for e, _ in totals_by_expiry.items():
+                if e not in top_expiries:
+                    rest += pivot.get(d, {}).get(e, 0)
+            series["Other"].append(rest)
+
+        return jsonify({"dates": dates, "series": series, "top_expiries": top_expiries})
+    finally:
+        session.close()
+
 # ============================================
 # PRIMARY VIEWS: Three main routes
 # ============================================

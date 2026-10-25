@@ -45,6 +45,12 @@
           <td>
             <a href="{{ url_for('api.ticker_view', symbol=r.symbol) }}">Ticker</a> ·
             <a href="{{ sec_url(r.symbol, '4') }}" target="_blank">Form 4</a>
+            <div style="margin-top:6px;">
+              <button class="btn-contracts" data-symbol="{{ r.symbol }}" data-date="{{ date_str }}">Contracts</button>
+            </div>
+            <div class="contracts-panel" id="contracts-{{ r.symbol }}" style="display:none; margin-top:8px; padding:6px; border:1px solid #eef3fc; border-radius:6px; background:#fff;">
+              <!-- content loaded dynamically -->
+            </div>
           </td>
         </tr>
         {% endfor %}
@@ -138,5 +144,84 @@
     </table>
   </div>
 </details>
+
+<script>
+document.querySelectorAll('.btn-contracts').forEach(btn=>{
+  btn.addEventListener('click', async (e)=>{
+    const symbol = btn.dataset.symbol;
+    const date = btn.dataset.date;
+    const panel = document.getElementById('contracts-'+symbol);
+    // toggle if already loaded
+    if(panel.dataset.loaded){
+      panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      return;
+    }
+    panel.innerHTML = '<div class="muted">Loading contracts...</div>';
+    panel.style.display = '';
+    try{
+      const resp = await fetch(`/api/iv_distribution?symbol=${symbol}&run_date=${date}`);
+      const data = await resp.json();
+      if(!Array.isArray(data) || data.length===0){
+        panel.innerHTML = '<div class="muted">No contract data available</div>';
+        panel.dataset.loaded = '1';
+        return;
+      }
+
+      // Build scatter arrays
+      const calls = data.filter(d=>d.right==='C');
+      const puts = data.filter(d=>d.right==='P');
+
+      const traceCalls = {
+        x: calls.map(d=>d.strike),
+        y: calls.map(d=>d.iv),
+        text: calls.map(d=>`OI:${d.oi} Vol:${d.volume} Δ:${d.delta}`),
+        mode: 'markers',
+        marker: { size: calls.map(d=> Math.max(6, Math.log((d.oi||1)+1)*4) ), color: '#175ddc', opacity:0.8 },
+        name: 'Calls'
+      };
+      const tracePuts = {
+        x: puts.map(d=>d.strike),
+        y: puts.map(d=>d.iv),
+        text: puts.map(d=>`OI:${d.oi} Vol:${d.volume} Δ:${d.delta}`),
+        mode: 'markers',
+        marker: { size: puts.map(d=> Math.max(6, Math.log((d.oi||1)+1)*4) ), color: '#b42318', opacity:0.8 },
+        name: 'Puts'
+      };
+
+      // Prepare layout
+      const layout = {
+        title: `${symbol} strikes vs IV (${date})`,
+        xaxis: { title: 'Strike' },
+        yaxis: { title: 'Implied Vol' },
+        margin: { t:36, r:10, l:40, b:40 },
+        height: 320
+      };
+
+      // Build table for top contracts by OI
+      const topByOi = data.sort((a,b)=> (b.oi||0)-(a.oi||0)).slice(0,8);
+      let tbl = '<div style="display:flex; gap:12px; flex-wrap:wrap;">';
+      tbl += '<div style="flex:1; min-width:260px;"><div style=\"font-weight:700;margin-bottom:6px;\">Top contracts (by OI)</div>';
+      tbl += '<table style="width:100%; font-size:12px;"><thead><tr><th>Right</th><th>Expiry</th><th>Strike</th><th>OI</th><th>Vol</th><th>IV</th></tr></thead><tbody>';
+      topByOi.forEach(c=>{
+        tbl += `<tr><td>${c.right}</td><td>${c.expiry}</td><td>${c.strike}</td><td>${c.oi}</td><td>${c.volume}</td><td>${c.iv!==null?c.iv.toFixed(3):'—'}</td></tr>`;
+      });
+      tbl += '</tbody></table></div>';
+
+      // Chart container
+      const chartId = 'chart-'+symbol;
+      tbl += `<div id="${chartId}" style="flex:1; min-width:320px;"></div>`;
+      tbl += '</div>';
+
+      panel.innerHTML = tbl;
+      Plotly.newPlot(chartId, [traceCalls, tracePuts], layout, {displayModeBar:false});
+
+      panel.dataset.loaded = '1';
+    }catch(err){
+      panel.innerHTML = '<div class="muted">Error loading contract data</div>';
+      console.error(err);
+    }
+  });
+});
+</script>
 
 {% endblock %}
