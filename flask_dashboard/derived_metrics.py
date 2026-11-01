@@ -138,8 +138,9 @@ def get_previous_run_date(symbol: str, run_date: str) -> Optional[str]:
 
 def compute_day_over_day_deltas(symbol: str, run_date: str) -> Dict:
     """
-    Compute deltas between today's option rows and previous run_date's rows using conid matching (preferred).
-    Returns a dict with aggregated deltas: call_volume_change, put_volume_change, call_oi_change, put_oi_change.
+    Compute day-over-day deltas for call/put volume and open interest for a symbol.
+    Returns a dict with keys:
+      call_volume_change, put_volume_change, call_oi_change, put_oi_change
     """
     today_contracts = get_option_contracts(symbol, run_date)
     prev_date = get_previous_run_date(symbol, run_date)
@@ -153,11 +154,18 @@ def compute_day_over_day_deltas(symbol: str, run_date: str) -> Dict:
 
     prev_contracts = get_option_contracts(symbol, prev_date)
 
-    # map by conid if available, else (expiry,strike,right)
-    prev_map = {}
-    for p in prev_contracts:
-        key = p["conid"] if p["conid"] else (p["expiry"], p["strike"], p["right"])
-        prev_map[key] = p
+    def contract_key(c):
+        if c.get("conid") is not None:
+            return ("conid", int(c["conid"]))
+        return (
+            "contract",
+            c.get("expiry"),
+            float(c.get("strike") or 0.0),
+            (c.get("right") or "").upper(),
+        )
+
+    prev_map = {contract_key(p): p for p in prev_contracts}
+    today_keys = set()
 
     call_vol_change = 0
     put_vol_change = 0
@@ -165,20 +173,37 @@ def compute_day_over_day_deltas(symbol: str, run_date: str) -> Dict:
     put_oi_change = 0
 
     for t in today_contracts:
-        key = t["conid"] if t["conid"] else (t["expiry"], t["strike"], t["right"])
+        key = contract_key(t)
+        today_keys.add(key)
         p = prev_map.get(key)
-        if p:
+
+        if p is not None:
             vol_delta = t["volume"] - p.get("volume", 0)
             oi_delta = t["open_interest"] - p.get("open_interest", 0)
         else:
-            # if no previous row, treat today's values as deltas (new lines)
             vol_delta = t["volume"]
             oi_delta = t["open_interest"]
 
         if t["right"] == "C":
             call_vol_change += vol_delta
             call_oi_change += oi_delta
-        else:
+        elif t["right"] == "P":
+            put_vol_change += vol_delta
+            put_oi_change += oi_delta
+
+    # contracts missing from today's set need to be removed from previous total
+    for p in prev_contracts:
+        key = contract_key(p)
+        if key in today_keys:
+            continue
+
+        vol_delta = -p.get("volume", 0)
+        oi_delta = -p.get("open_interest", 0)
+
+        if p["right"] == "C":
+            call_vol_change += vol_delta
+            call_oi_change += oi_delta
+        elif p["right"] == "P":
             put_vol_change += vol_delta
             put_oi_change += oi_delta
 
@@ -189,16 +214,15 @@ def compute_day_over_day_deltas(symbol: str, run_date: str) -> Dict:
         "put_oi_change": put_oi_change,
     }
 
-
 def compute_persistence_flags(symbol: str, run_date: str, lookback_days: int = 3) -> Dict:
     """
-    Compute simple persistence flags such as consecutive_days_call_build.
-    Uses SymbolDayMetric rows when available (fast). If not available, falls
-    back to examining OptionTick call shares over the last lookback_days.
+    Compute persistence flags for a symbol over the last N days (including run_date).
+    Returns a dict with keys:
+      consecutive_days_call_build: int
+      lookback_days_found: int (number of days with data found, may be < lookback_days)
     """
     session = SessionLocal()
     try:
-        # try to use persisted symbol_day_metrics if present
         rows = (
             session.query(SymbolDayMetric)
             .filter(SymbolDayMetric.symbol == symbol, SymbolDayMetric.run_date <= run_date)
@@ -206,18 +230,32 @@ def compute_persistence_flags(symbol: str, run_date: str, lookback_days: int = 3
             .limit(lookback_days)
             .all()
         )
+
         if rows and len(rows) >= 1:
-            # count consecutive rows from latest where call_build_flag is truthy
             consecutive = 0
             for r in rows:
-                if r.call_build_flag:
+                if r.call_build_flag is not None:
+                    is_build_day = bool(r.call_build_flag)
+                else:
+                    call_share = r.call_volume_share if r.call_volume_share is not None else 0.0
+                    call_oi_change = r.call_oi_change
+                    is_build_day = (
+                        call_share >= 0.65
+                        and call_oi_change is not None
+                        and call_oi_change > 0
+                    )
+
+                if is_build_day:
                     consecutive += 1
                 else:
                     break
-            return {"consecutive_days_call_build": consecutive, "lookback_days_found": len(rows)}
 
-        # fallback: compute call_build for each date by running a small aggregation
-        # gather last N run_dates from OptionTick
+            return {
+                "consecutive_days_call_build": consecutive,
+                "lookback_days_found": len(rows),
+            }
+
+        # fallback for missing persisted rows
         dates = (
             session.query(OptionTick.run_date)
             .filter(OptionTick.symbol == symbol, OptionTick.run_date <= run_date)
@@ -226,6 +264,7 @@ def compute_persistence_flags(symbol: str, run_date: str, lookback_days: int = 3
             .limit(lookback_days)
             .all()
         )
+
         if not dates:
             return {"consecutive_days_call_build": 0, "lookback_days_found": 0}
 
@@ -233,19 +272,38 @@ def compute_persistence_flags(symbol: str, run_date: str, lookback_days: int = 3
         for d_row in dates:
             d = str(d_row[0])
             contracts = get_option_contracts(symbol, d)
-            total_call_vol = sum([c["volume"] for c in contracts if c["right"] == "C"])
-            total_put_vol = sum([c["volume"] for c in contracts if c["right"] == "P"])
-            total = total_call_vol + total_put_vol
-            call_share = (total_call_vol / total) if total > 0 else 0.0
-            # heuristics: call share >= 0.65 indicates call build for that day (adjustable)
-            if call_share >= 0.65:
+
+            total_call_vol = sum(c["volume"] for c in contracts if c["right"] == "C")
+            total_put_vol = sum(c["volume"] for c in contracts if c["right"] == "P")
+            total_volume = total_call_vol + total_put_vol
+            call_share = (total_call_vol / total_volume) if total_volume > 0 else 0.0
+
+            prev_date = get_previous_run_date(symbol, d)
+            if prev_date:
+                prev_contracts = get_option_contracts(symbol, prev_date)
+                prev_call_oi = sum(c["open_interest"] for c in prev_contracts if c["right"] == "C")
+                curr_call_oi = sum(c["open_interest"] for c in contracts if c["right"] == "C")
+                call_oi_change = curr_call_oi - prev_call_oi
+            else:
+                call_oi_change = None
+
+            is_build_day = (
+                call_share >= 0.65
+                and call_oi_change is not None
+                and call_oi_change > 0
+            )
+
+            if is_build_day:
                 consecutive += 1
             else:
                 break
-        return {"consecutive_days_call_build": consecutive, "lookback_days_found": len(dates)}
+
+        return {
+            "consecutive_days_call_build": consecutive,
+            "lookback_days_found": len(dates),
+        }
     finally:
         session.close()
-
 
 def compute_rolling_symbol_history(symbol: str, lookback_days: int = 14) -> List[Dict]:
     """
@@ -429,12 +487,12 @@ def compute_symbol_day_metrics(symbol: str, run_date: str, save: bool = True) ->
     consecutive_days_call_build = persistence.get("consecutive_days_call_build", 0)
 
     # simple call build flag heuristics (phase-1): elevated call share and positive oi change
-    call_build_flag = 0
-    try:
-        if call_volume_share is not None and call_volume_share >= 0.65 and deltas.get("call_oi_change", 0) > 0:
-            call_build_flag = 1
-    except Exception:
-        call_build_flag = 0
+    call_build_flag = (
+        call_volume_share is not None
+        and call_volume_share >= 0.65
+        and deltas.get("call_oi_change") is not None
+        and deltas.get("call_oi_change") > 0
+    )
 
     # insider / signal context
     insider_conv = None
